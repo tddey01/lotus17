@@ -13,6 +13,9 @@ import (
 
 	"github.com/filecoin-project/lotus/storage/sealer/sealtasks"
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
+
+	//yungojs
+	record "github.com/filecoin-project/lotus/extern/record-task"
 )
 
 type WorkID struct {
@@ -354,9 +357,92 @@ func (m *Manager) returnResult(ctx context.Context, callID storiface.CallID, r i
 		r: r,
 	}
 	if cerr != nil {
-		res.err = cerr
+		//yungojs
+		log.Error(os.Getenv("FINFORCE"), callID.Sector.Number, "-------返回错误信息：", cerr.Message)
+		if callID.TT == sealtasks.TTFinalize || callID.TT == sealtasks.TTFetch {
+			if os.Getenv("FINFORCE") != "true" {
+				res.err = cerr
+			}
+			si, err1 := m.index.StorageFindSector(ctx, callID.Sector, storiface.FTSealed, 0, false)
+			if err1 != nil {
+				log.Warn("中创returnResult：", err1)
+			}
+			flage := false
+			for _, v := range si {
+				if v.CanStore {
+					log.Info("已存在扇区:", callID.Sector, ",", v.ID)
+					flage = true
+				}
+			}
+			if !flage {
+				res.err = cerr
+			}
+		} else {
+			res.err = cerr
+		}
 	}
+	//任务控制 yungojs
+	yungoid := callID
+	callID.TT = ""
+	defer func() {
+		var st SectorTask
+		//扇区->workerid
+		if yungoid.TT == sealtasks.TTAddPiece || yungoid.TT == sealtasks.TTPreCommit1 {
+			for i := 0; i < 100; i++ {
+				st = GetSectorTask(m.sched.sectorscalls, yungoid.Sector.Number)
+				if st.Wid.String() == "" {
+					log.Info("未获取扇区信息，即将继续：", callID.Sector.Number)
+					time.Sleep(time.Millisecond * 100)
+					continue
+				}
+				break
+			}
+		}
+		log.Info(callID.Sector.Number, ",返回任务类型为：", yungoid.TT, ",", st)
+		//worker各种任务数
+		switch yungoid.TT {
+		case sealtasks.TTAddPiece:
+			if cerr != nil {
+				t := record.NewTaskCount(m.sched.workcalls, st.Wid.String())
+				//清空资源
+				if m.sched.Workers[st.Wid] != nil && m.sched.Workers[st.Wid].active != nil {
+					m.sched.Workers[st.Wid].active.emptyMem()
+				}
+				if err := t.SubAPcount(m.sched.workcalls); err != nil {
+					log.Errorf("减少%s任务失败！", st.Wid.String(), err)
+				}
+				t.FreeTaskMt()
+			}
 
+		case sealtasks.TTPreCommit1:
+			//清空资源
+			if m.sched.Workers[st.Wid] != nil && m.sched.Workers[st.Wid].active != nil {
+				m.sched.Workers[st.Wid].active.emptyMem()
+			}
+			if cerr == nil {
+				a, err := NewP1Count(m.sched.alreadycalls)
+				if err != nil {
+					log.Error("获取总数失败！", err)
+				}
+				if err := a.SubP1Count(m.sched.alreadycalls); err != nil {
+					log.Error("减少已发任务失败！", err)
+				}
+				a.FreeAlMt()
+				t := record.NewTaskCount(m.sched.workcalls, st.Wid.String())
+				if err := t.SubApAndP1count(m.sched.workcalls); err != nil {
+					log.Error("减少任务数失败！", err)
+				}
+				t.FreeTaskMt()
+			} else {
+				t := record.NewTaskCount(m.sched.workcalls, st.Wid.String())
+				if err := t.SubP1count(m.sched.workcalls); err != nil {
+					log.Error("减少任务数失败！", err)
+				}
+				t.FreeTaskMt()
+			}
+		default:
+		}
+	}()
 	m.sched.workTracker.onDone(ctx, callID)
 
 	m.workLk.Lock()
@@ -377,7 +463,10 @@ func (m *Manager) returnResult(ctx context.Context, callID storiface.CallID, r i
 			return xerrors.Errorf("expected rch to be buffered")
 		}
 
-		rch <- res
+		//yungojs
+		go func() {
+			rch <- res
+		}()
 		return nil
 	}
 

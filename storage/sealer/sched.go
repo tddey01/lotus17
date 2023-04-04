@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+	//yungojs
+	"github.com/filecoin-project/go-statestore"
 
 	"github.com/google/uuid"
 	"golang.org/x/xerrors"
@@ -19,7 +21,8 @@ type schedPrioCtxKey int
 var SchedPriorityKey schedPrioCtxKey
 var DefaultSchedPriority = 0
 var SelectorTimeout = 5 * time.Second
-var InitWait = 3 * time.Second
+//var InitWait = 3 * time.Second
+var InitWait = 30 * time.Second //yungojs
 
 var (
 	SchedWindows = 2
@@ -68,11 +71,23 @@ type Scheduler struct {
 
 	workTracker *workTracker
 
-	info chan func(interface{})
+	info      chan func(interface{})
+	rmRequest chan *rmRequest
 
 	closing  chan struct{}
 	closed   chan struct{}
 	testSync chan struct{} // used for testing
+
+	//yungojs
+	sectorscalls *statestore.StateStore
+	workcalls    *statestore.StateStore
+	alreadycalls *statestore.StateStore
+	workeripLk 	 sync.RWMutex
+	workerip     map[storiface.WorkerID]string
+	ipworkerLk 	 sync.RWMutex
+	ipworker     map[string]storiface.WorkerID
+	hostnameipLk sync.RWMutex
+	hostnameip   map[string]string
 }
 
 type WorkerHandle struct {
@@ -122,6 +137,7 @@ type WorkerRequest struct {
 	TaskType sealtasks.TaskType
 	Priority int // larger values more important
 	Sel      WorkerSelector
+	SchedId  uuid.UUID
 
 	prepare WorkerAction
 	work    WorkerAction
@@ -139,7 +155,13 @@ type workerResponse struct {
 	err error
 }
 
-func newScheduler(assigner string) (*Scheduler, error) {
+type rmRequest struct {
+	id  uuid.UUID
+	res chan error
+}
+//yungojs
+var Sectorscalls *statestore.StateStore
+func newScheduler(assigner string,scalls *statestore.StateStore,tcalls *statestore.StateStore,acalls *statestore.StateStore) (*Scheduler, error) {
 	var a Assigner
 	switch assigner {
 	case "", "utilization":
@@ -149,7 +171,8 @@ func newScheduler(assigner string) (*Scheduler, error) {
 	default:
 		return nil, xerrors.Errorf("unknown assigner '%s'", assigner)
 	}
-
+	//yungojs
+	Sectorscalls = scalls
 	return &Scheduler{
 		assigner: a,
 
@@ -168,10 +191,19 @@ func newScheduler(assigner string) (*Scheduler, error) {
 			prepared: map[uuid.UUID]trackedWork{},
 		},
 
-		info: make(chan func(interface{})),
+		info:      make(chan func(interface{})),
+		rmRequest: make(chan *rmRequest),
 
 		closing: make(chan struct{}),
 		closed:  make(chan struct{}),
+
+		//yungojs
+		sectorscalls: scalls,
+		workcalls:    tcalls,
+		alreadycalls: acalls,
+		workerip:     make(map[storiface.WorkerID]string),
+		ipworker:     make(map[string]storiface.WorkerID),
+		hostnameip:   make(map[string]string),
 	}, nil
 }
 
@@ -184,6 +216,7 @@ func (sh *Scheduler) Schedule(ctx context.Context, sector storiface.SectorRef, t
 		TaskType: taskType,
 		Priority: getPriority(ctx),
 		Sel:      sel,
+		SchedId:  uuid.New(),
 
 		prepare: prepare,
 		work:    work,
@@ -228,6 +261,10 @@ type SchedDiagRequestInfo struct {
 	Sector   abi.SectorID
 	TaskType sealtasks.TaskType
 	Priority int
+	SchedId  uuid.UUID
+
+	Ip  string //yungojs
+	Wid string //yungojs
 }
 
 type SchedDiagInfo struct {
@@ -240,12 +277,16 @@ func (sh *Scheduler) runSched() {
 
 	iw := time.After(InitWait)
 	var initialised bool
-
+	//yungojs
+	rtime := time.Minute * 2
 	for {
 		var doSched bool
 		var toDisable []workerDisableReq
 
 		select {
+		case rmreq := <-sh.rmRequest:
+			sh.removeRequest(rmreq)
+			doSched = true
 		case <-sh.workerChange:
 			doSched = true
 		case dreq := <-sh.workerDisable:
@@ -258,12 +299,15 @@ func (sh *Scheduler) runSched() {
 			if sh.testSync != nil {
 				sh.testSync <- struct{}{}
 			}
+		case <-time.After(rtime): //yungojs
+			log.Info("1进入任务队列。。。")
+			doSched = true
+
 		case req := <-sh.windowRequests:
 			sh.OpenWindows = append(sh.OpenWindows, req)
 			doSched = true
 		case ireq := <-sh.info:
 			ireq(sh.diag())
-
 		case <-iw:
 			initialised = true
 			iw = nil
@@ -289,6 +333,8 @@ func (sh *Scheduler) runSched() {
 					}
 				case req := <-sh.windowRequests:
 					sh.OpenWindows = append(sh.OpenWindows, req)
+				case <-time.After(rtime): //yungojs
+					log.Info("2进入任务队列。。。")
 				default:
 					break loop
 				}
@@ -315,8 +361,8 @@ func (sh *Scheduler) runSched() {
 
 				req.done()
 			}
-
-			sh.trySched()
+			//yungojs
+			sh.trySched1()
 		}
 
 	}
@@ -327,11 +373,25 @@ func (sh *Scheduler) diag() SchedDiagInfo {
 
 	for sqi := 0; sqi < sh.SchedQueue.Len(); sqi++ {
 		task := (*sh.SchedQueue)[sqi]
-
+		//yungojs
+		var sect SectorTask
+		b, _ := sh.sectorscalls.Has(task.Sector.ID.Number)
+		if b {
+			buf, err := sh.sectorscalls.GetByKey(task.Sector.ID.Number)
+			if err != nil {
+				log.Errorf("获取扇区记录错误 %s", err)
+			}
+			sect = NewSectorTask(buf)
+			//sect.FreeSectMt()
+		}
 		out.Requests = append(out.Requests, SchedDiagRequestInfo{
 			Sector:   task.Sector.ID,
 			TaskType: task.TaskType,
 			Priority: task.Priority,
+			SchedId:  task.SchedId,
+
+			Ip:       sect.Ip,           //yungojs
+			Wid:      sect.Wid.String(), //yungojs
 		})
 	}
 
@@ -378,6 +438,49 @@ func (sh *Scheduler) Info(ctx context.Context) (interface{}, error) {
 		return res, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+func (sh *Scheduler) removeRequest(rmrequest *rmRequest) {
+
+	if sh.SchedQueue.Len() < 0 {
+		rmrequest.res <- xerrors.New("No requests in the scheduler")
+		return
+	}
+
+	queue := sh.SchedQueue
+	for i, r := range *queue {
+		if r.SchedId == rmrequest.id {
+			queue.Remove(i)
+			rmrequest.res <- nil
+			go r.respond(xerrors.Errorf("scheduling request removed"))
+			return
+		}
+	}
+	rmrequest.res <- xerrors.New("No request with provided details found")
+}
+
+func (sh *Scheduler) RemoveRequest(ctx context.Context, schedId uuid.UUID) error {
+	ret := make(chan error, 1)
+
+	select {
+	case sh.rmRequest <- &rmRequest{
+		id:  schedId,
+		res: ret,
+	}:
+	case <-sh.closing:
+		return xerrors.New("closing")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case resp := <-ret:
+		return resp
+	case <-sh.closing:
+		return xerrors.New("closing")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

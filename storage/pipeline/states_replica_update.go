@@ -10,7 +10,7 @@ import (
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
 	"github.com/filecoin-project/go-state-types/builtin"
-	"github.com/filecoin-project/go-state-types/builtin/v8/miner"
+	"github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	"github.com/filecoin-project/go-state-types/exitcode"
 	"github.com/filecoin-project/go-statemachine"
 
@@ -21,10 +21,16 @@ import (
 )
 
 func (m *Sealing) handleReplicaUpdate(ctx statemachine.Context, sector SectorInfo) error {
-	if err := checkPieces(ctx.Context(), m.maddr, sector, m.Api, true); err != nil { // Sanity check state
+	// if the sector ended up not having any deals, abort the upgrade
+	if !sector.hasDeals() {
+		return ctx.Send(SectorAbortUpgrade{xerrors.New("sector had no deals")})
+	}
+
+	if err := checkPieces(ctx.Context(), m.maddr, sector.SectorNumber, sector.Pieces, m.Api, true); err != nil { // Sanity check state
 		return handleErrors(ctx, err, sector)
 	}
-	out, err := m.sealer.ReplicaUpdate(sector.sealingCtx(ctx.Context()), m.minerSector(sector.SectorType, sector.SectorNumber), sector.pieceInfos())
+	//yungojs
+	out, err := m.sealer.ReplicaUpdate(sector.sealingCtx(ctx.Context(),DealSectorPriority), m.minerSector(sector.SectorType, sector.SectorNumber), sector.pieceInfos())
 	if err != nil {
 		return ctx.Send(SectorUpdateReplicaFailed{xerrors.Errorf("replica update failed: %w", err)})
 	}
@@ -55,17 +61,17 @@ func (m *Sealing) handleProveReplicaUpdate(ctx statemachine.Context, sector Sect
 		log.Errorf("sector marked for upgrade %d no longer active, aborting upgrade", sector.SectorNumber)
 		return ctx.Send(SectorAbortUpgrade{})
 	}
-
-	vanillaProofs, err := m.sealer.ProveReplicaUpdate1(sector.sealingCtx(ctx.Context()), m.minerSector(sector.SectorType, sector.SectorNumber), *sector.CommR, *sector.UpdateSealed, *sector.UpdateUnsealed)
+	//yungojs
+	vanillaProofs, err := m.sealer.ProveReplicaUpdate1(sector.sealingCtx(ctx.Context(),DealSectorPriority), m.minerSector(sector.SectorType, sector.SectorNumber), *sector.CommR, *sector.UpdateSealed, *sector.UpdateUnsealed)
 	if err != nil {
 		return ctx.Send(SectorProveReplicaUpdateFailed{xerrors.Errorf("prove replica update (1) failed: %w", err)})
 	}
 
-	if err := checkPieces(ctx.Context(), m.maddr, sector, m.Api, true); err != nil { // Sanity check state
+	if err := checkPieces(ctx.Context(), m.maddr, sector.SectorNumber, sector.Pieces, m.Api, true); err != nil { // Sanity check state
 		return handleErrors(ctx, err, sector)
 	}
-
-	proof, err := m.sealer.ProveReplicaUpdate2(sector.sealingCtx(ctx.Context()), m.minerSector(sector.SectorType, sector.SectorNumber), *sector.CommR, *sector.UpdateSealed, *sector.UpdateUnsealed, vanillaProofs)
+	//yungojs
+	proof, err := m.sealer.ProveReplicaUpdate2(sector.sealingCtx(ctx.Context(),DealSectorPriority), m.minerSector(sector.SectorType, sector.SectorNumber), *sector.CommR, *sector.UpdateSealed, *sector.UpdateUnsealed, vanillaProofs)
 	if err != nil {
 		return ctx.Send(SectorProveReplicaUpdateFailed{xerrors.Errorf("prove replica update (2) failed: %w", err)})
 
@@ -168,7 +174,7 @@ func (m *Sealing) handleSubmitReplicaUpdate(ctx statemachine.Context, sector Sec
 		return nil
 	}
 
-	from, _, err := m.addrSel(ctx.Context(), mi, api.CommitAddr, goodFunds, collateral)
+	from, _, err := m.addrSel.AddressFor(ctx.Context(), m.Api, mi, api.CommitAddr, goodFunds, collateral)
 	if err != nil {
 		log.Errorf("no good address to send replica update message from: %+v", err)
 		return ctx.Send(SectorSubmitReplicaUpdateFailed{})
@@ -226,8 +232,8 @@ func (m *Sealing) handleFinalizeReplicaUpdate(ctx statemachine.Context, sector S
 	if err != nil {
 		return xerrors.Errorf("getting sealing config: %w", err)
 	}
-
-	if err := m.sealer.FinalizeReplicaUpdate(sector.sealingCtx(ctx.Context()), m.minerSector(sector.SectorType, sector.SectorNumber), sector.keepUnsealedRanges(sector.Pieces, false, cfg.AlwaysKeepUnsealedCopy)); err != nil {
+	//yungojs
+	if err := m.sealer.FinalizeReplicaUpdate(sector.sealingCtx(ctx.Context(), DealSectorPriority), m.minerSector(sector.SectorType, sector.SectorNumber), sector.keepUnsealedRanges(sector.Pieces, false, cfg.AlwaysKeepUnsealedCopy)); err != nil {
 		return ctx.Send(SectorFinalizeFailed{xerrors.Errorf("finalize sector: %w", err)})
 	}
 
@@ -235,6 +241,10 @@ func (m *Sealing) handleFinalizeReplicaUpdate(ctx statemachine.Context, sector S
 }
 
 func (m *Sealing) handleUpdateActivating(ctx statemachine.Context, sector SectorInfo) error {
+	if sector.ReplicaUpdateMessage == nil {
+		return xerrors.Errorf("nil sector.ReplicaUpdateMessage!")
+	}
+
 	try := func() error {
 		mw, err := m.Api.StateWaitMsg(ctx.Context(), *sector.ReplicaUpdateMessage, build.MessageConfidence, api.LookbackNoLimit, true)
 		if err != nil {
@@ -279,7 +289,8 @@ func (m *Sealing) handleUpdateActivating(ctx statemachine.Context, sector Sector
 }
 
 func (m *Sealing) handleReleaseSectorKey(ctx statemachine.Context, sector SectorInfo) error {
-	if err := m.sealer.ReleaseSectorKey(sector.sealingCtx(ctx.Context()), m.minerSector(sector.SectorType, sector.SectorNumber)); err != nil {
+	//yungojs
+	if err := m.sealer.ReleaseSectorKey(sector.sealingCtx(ctx.Context(), DealSectorPriority), m.minerSector(sector.SectorType, sector.SectorNumber)); err != nil {
 		return ctx.Send(SectorReleaseKeyFailed{err})
 	}
 
@@ -297,6 +308,6 @@ func handleErrors(ctx statemachine.Context, err error, sector SectorInfo) error 
 	case *ErrExpiredDeals: // Probably not much we can do here, maybe re-pack the sector?
 		return ctx.Send(SectorDealsExpired{xerrors.Errorf("expired dealIDs in sector: %w", err)})
 	default:
-		return xerrors.Errorf("checkPieces sanity check error: %w", err)
+		return xerrors.Errorf("checkPieces sanity check error: %w (%+v)", err, err)
 	}
 }

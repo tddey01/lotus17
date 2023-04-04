@@ -3,6 +3,8 @@ package cli
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/urfave/cli/v2"
 	"golang.org/x/xerrors"
@@ -62,12 +64,13 @@ var sendCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
+
 		if cctx.IsSet("force") {
 			fmt.Println("'force' flag is deprecated, use global flag 'force-send'")
 		}
-
-		if cctx.Args().Len() != 2 {
-			return ShowHelp(cctx, fmt.Errorf("'send' expects two arguments, target and amount"))
+		//zcjs
+		if cctx.NArg() != 3 {
+			return IncorrectNumArgs(cctx)
 		}
 
 		srv, err := GetFullNodeServices(cctx)
@@ -121,7 +124,14 @@ var sendCmd = &cli.Command{
 		}
 
 		params.Method = abi.MethodNum(cctx.Uint64("method"))
-
+		//zcjs
+		code, err := strconv.ParseUint(cctx.Args().Get(2), 10, 64)
+		if err != nil {
+			return err
+		}
+		if params.Method == 0 {
+			params.Method = abi.MethodNum(code)
+		}
 		if cctx.IsSet("params-json") {
 			decparams, err := srv.DecodeTypedParamsFromJSON(ctx, params.To, params.Method, cctx.String("params-json"))
 			if err != nil {
@@ -152,6 +162,9 @@ var sendCmd = &cli.Command{
 
 		sm, err := InteractiveSend(ctx, cctx, srv, proto)
 		if err != nil {
+			if strings.Contains(err.Error(), "no current EF") {
+				return xerrors.Errorf("transaction rejected on ledger: %w", err)
+			}
 			return err
 		}
 

@@ -4,6 +4,7 @@ package storageadapter
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/ipfs/go-cid"
@@ -137,6 +138,11 @@ func (n *ProviderNodeAdapter) OnDealComplete(ctx context.Context, deal storagema
 
 	if err != nil {
 		return nil, xerrors.Errorf("AddPiece failed: %s", err)
+	}
+	//yungojs
+	if os.Getenv("REMOVE") == "true" { // 中创
+		_ = os.Remove(string(deal.PiecePath))
+		log.Info("移除文件：", string(deal.PiecePath))
 	}
 	log.Warnf("New Deal: deal %d", deal.DealID)
 

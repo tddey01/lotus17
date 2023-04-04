@@ -1,0 +1,442 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"fmt"
+	"github.com/docker/go-units"
+	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/abi"
+	"github.com/filecoin-project/lotus/build"
+	"github.com/filecoin-project/lotus/chain/actors/builtin/miner"
+	"github.com/filecoin-project/lotus/extern/db"
+	"github.com/filecoin-project/lotus/extern/sector-storage/ffiwrapper"
+	"github.com/filecoin-project/lotus/extern/sector-storage/ffiwrapper/basicfs"
+	server_c2 "github.com/filecoin-project/lotus/extern/server-c2"
+	"github.com/filecoin-project/specs-storage/storage"
+	"github.com/mitchellh/go-homedir"
+	"github.com/urfave/cli/v2"
+	"golang.org/x/xerrors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+var sealRecoverCmd1 = &cli.Command{
+	Name:  "run1",
+	Usage: "有效数据扇区恢复",
+	Flags: []cli.Flag{
+		&cli.StringFlag{
+			Name:  "storage-dir",
+			Value: ".lotus-recover",
+			Usage: "path to the storage directory that will store sectors long term",
+		},
+		//&cli.StringFlag{
+		//	Name:  "move-dirs",
+		//	Usage: "设置转移存储路径逗号隔开：/mnt/md0,/mnt/md1",
+		//},
+		&cli.StringFlag{
+			Name:  "sector-size",
+			Value: "32GiB",
+			Usage: "size of the sectors in bytes, i.e. 32GiB",
+		},
+		&cli.BoolFlag{
+			Name:  "no-gpu",
+			Usage: "disable gpu usage for the benchmark run",
+		},
+		&cli.StringFlag{
+			Name:  "miner-addr",
+			Usage: "pass miner address (only necessary if using existing sectorbuilder)",
+			//Value: db.TableName,
+		},
+		//&cli.StringFlag{
+		//	Name:  "sids",
+		//	Usage: "扇区ID列表：0 1 2 3（all代表全部）",
+		//},
+		&cli.IntFlag{
+			Name:  "parallel",
+			Usage: "num run in parallel",
+			Value: 1,
+		},
+		&cli.BoolFlag{
+			Name:  "active",
+			Usage: "有效扇区恢复",
+			Value: false,
+		},
+	},
+	Action: func(c *cli.Context) error {
+		if c.Bool("no-gpu") {
+			err := os.Setenv("BELLMAN_NO_GPU", "1")
+			if err != nil {
+				return xerrors.Errorf("setting no-gpu flag: %w", err)
+			}
+		}
+		//sids := strings.Trim(c.String("sids")," ")
+		//if sids==""{
+		//	return xerrors.Errorf("扇区号不能为空！")
+		//}
+		if c.String("miner-addr") == "" {
+			return xerrors.Errorf("矿工号不能为空！")
+		}
+
+		var sbdir string
+
+		sdir, err := homedir.Expand(c.String("storage-dir"))
+		if err != nil {
+			return err
+		}
+
+		err = os.MkdirAll(sdir, 0775) //nolint:gosec
+		if err != nil {
+			return xerrors.Errorf("creating sectorbuilder dir: %w", err)
+		}
+
+		//tsdir, err := ioutil.TempDir(sdir, "recover")
+		//if err != nil {
+		//	return err
+		//}
+		//
+		//// TODO: pretty sure this isnt even needed?
+		//if err := os.MkdirAll(tsdir, 0775); err != nil {
+		//	return err
+		//}
+
+		sbdir = sdir
+
+		// miner address
+		maddr, err := address.NewFromString(c.String("miner-addr"))
+		if err != nil {
+			return err
+		}
+		amid, err := address.IDFromAddress(maddr)
+		if err != nil {
+			return err
+		}
+		mid := abi.ActorID(amid)
+
+		// sector size
+		sectorSizeInt, err := units.RAMInBytes(c.String("sector-size"))
+		if err != nil {
+			return err
+		}
+		sectorSize := abi.SectorSize(sectorSizeInt)
+
+		sbfs := &basicfs.Provider{
+			Root: sbdir,
+		}
+
+		sb, err := ffiwrapper.New(sbfs)
+		if err != nil {
+			return err
+		}
+
+		//err = runSeals(sb, c.String("sectors-load"),c.String("move-dirs"), c.Int("parallel"), mid, sectorSize)
+		err = runSeals1(sb, sdir, c.Int("parallel"), mid, sectorSize,c.Bool("active"))
+		if err != nil {
+			return xerrors.Errorf("failed to run seals: %w", err)
+		}
+
+		return nil
+	},
+}
+
+
+
+type sectorTicket1 struct {
+	sector storage.SectorRef
+	ticket []byte
+	commd string
+	size string
+}
+type p1Run1 struct {
+	pinfo abi.PieceInfo
+	st    sectorTicket1
+}
+type p2Run1 struct {
+	pout   storage.PreCommit1Out
+	sector storage.SectorRef
+}
+
+
+func runSeals1(sb *ffiwrapper.Sealer, sdr string, par int, mid abi.ActorID, sectorSize abi.SectorSize,active bool) error {
+	preCommit1Run := make(chan p1Run1, par)
+	preCommit1Finish := make(chan struct{}, 1)
+	preCommit2Run := make(chan p2Run1, 1024)
+	apPiceRun := make(chan sectorTicket1, par)
+	stroageRun := make(chan storage.SectorRef, 1024)
+	go func() {
+		var i = 0
+		var run = true
+		for {
+			if i >= par && run {
+				<-preCommit1Finish
+			}
+
+			sql := `select sector_id,ticket,cid_commd,size from ` + db.TableTicket + ` where proving = 1 and running = 0 ORDER BY sector_id limit 1 `
+			res, err := db.DBengine.QueryString(sql)
+			if err != nil {
+				run = false
+				log.Error("获取扇区数据失败：", err.Error())
+				continue
+			}
+			if len(res) == 0 {
+				run = false
+				log.Error("无可重做扇区")
+
+				time.Sleep(time.Minute)
+				continue
+			}
+			sql2 := `update ` + db.TableTicket + ` set running = 1 where sector_id=? and running<>1`
+
+			res1, err1 := db.DBengine.Exec(sql2, res[0]["sector_id"])
+			if err1 != nil {
+				run = false
+				log.Error("修改状态错误:", err1.Error())
+				continue
+			}
+			if row, _ := res1.RowsAffected(); row == 0 {
+				run = false
+				log.Error("重复重做:", res[0]["sector_id"])
+				continue
+			}
+
+			sn, err := strconv.ParseUint(res[0]["sector_id"], 10, 64)
+			if err != nil {
+				run = false
+				log.Error("扇区号有误：", err.Error())
+				continue
+			}
+			if res[0]["ticket"] == "" {
+				run = false
+				log.Error("ticket有误：", err.Error(), res[0]["sector_id"])
+				continue
+			}
+			i++
+			run = true
+
+			s := sectorTicket1{
+				storage.SectorRef{
+					ID: abi.SectorID{
+						Miner:  mid,
+						Number: abi.SectorNumber(sn),
+					},
+					ProofType: spt(sectorSize),
+				},
+
+				[]byte(res[0]["ticket"]),
+				res[0]["cidcommd"],
+				res[0]["size"],
+			}
+			apPiceRun <- s
+		}
+	}()
+	//AP
+	go func() {
+		for {
+			select {
+			case sid := <-apPiceRun:
+				log.Info("开始扇区：", sid.sector.ID, string(sid.ticket))
+				go func(ticket sectorTicket1) {
+					p1info, err := runAp1(sb, ticket.sector, sectorSize,active,ticket.commd,ticket.size)
+					if err != nil {
+						log.Error("AP错误：", err.Error(), ",", ticket.sector.ID)
+						return
+					}
+					p1 := p1Run1{
+						p1info,
+						ticket,
+					}
+					preCommit1Run <- p1
+				}(sid)
+			}
+		}
+	}()
+	//P1
+	go func() {
+		for {
+			select {
+			case p1 := <-preCommit1Run:
+				go func(run p1Run1) {
+					p1out, err := runP11(sb, run.st.sector, run.st.ticket, run.pinfo)
+					defer func() { preCommit1Finish <- struct{}{} }()
+					if err != nil {
+						log.Error("P1错误：", err.Error(), ",", run.st.sector.ID)
+						return
+					}
+					p2 := p2Run1{
+						p1out,
+						p1.st.sector,
+					}
+					preCommit2Run <- p2
+				}(p1)
+			}
+		}
+	}()
+	//P2
+	go func() {
+		for {
+			select {
+			case p2 := <-preCommit2Run:
+				if err := runP21(sb, p2.sector, p2.pout); err != nil {
+					log.Error("P2错误：", err.Error(), ",", p2.sector.ID)
+					continue
+				}
+				stroageRun <- p2.sector
+
+			}
+		}
+	}()
+	//fin
+	for {
+		select {
+		case si := <-stroageRun:
+			go func() {
+				moveStorage1(sb, sdr, si)
+			}()
+		}
+	}
+}
+
+func runAp1(sb *ffiwrapper.Sealer, sid storage.SectorRef, sectorSize abi.SectorSize,active bool,cid1 string,size string) (abi.PieceInfo, error) {
+	log.Infof("[%d] Writing piece into sector...", sid.ID)
+
+	var pi abi.PieceInfo
+	var err error
+	sizeuint64,_ := strconv.ParseUint(size,10,64)
+	if !active{
+		pi,err = sb.AddPiece3(context.TODO(),sid,abi.PaddedPieceSize(sectorSize).Unpadded(),cid1,sizeuint64)
+		if err != nil {
+			return abi.PieceInfo{}, err
+		}
+	}
+
+	return pi, nil
+}
+
+func runP11(sb *ffiwrapper.Sealer, sid storage.SectorRef, ticketPreimage []byte, pi abi.PieceInfo) (storage.PreCommit1Out, error) {
+	ticket, _ := hex.DecodeString(string(ticketPreimage))
+
+	log.Infof("[%d] Running replication(1)...%s", sid.ID.Number, string(ticket))
+	piece := []abi.PieceInfo{pi}
+
+	return sb.SealPreCommit1(context.TODO(), sid, ticket, piece)
+}
+
+func runP21(sb *ffiwrapper.Sealer, sid storage.SectorRef, pc1o storage.PreCommit1Out) error {
+	log.Infof("[%d] Running replication(2)...", sid.ID.Number)
+	_, err := sb.SealPreCommit2(context.TODO(), sid, pc1o)
+	if err != nil {
+		return xerrors.Errorf("precommit2: %w", err)
+	}
+	sql2 := `update ` + db.TableTicket + ` set running = 2 where sector_id=?`
+
+	if _, err = db.DBengine.Exec(sql2, sid.ID.Number.String()); err != nil {
+		log.Error("修改扇区状态错误:", err.Error())
+	}
+	return nil
+}
+
+func moveStorage1(sb *ffiwrapper.Sealer, sdr string, si storage.SectorRef) {
+	log.Info("待转移扇区：", si.ID)
+	if err := sb.FinalizeSector(context.Background(), si, nil); err != nil {
+		log.Error("fin错误：", err.Error())
+		return
+	}
+	path := ""
+	id := ""
+	for {
+
+		sql := `select path,id from ` + db.TableStorage + ` where running = 0 limit 1  `
+		res, err := db.DBengine.QueryString(sql)
+		if err != nil {
+			log.Error("获取存储错误：", err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		if len(res) == 0 {
+			log.Error("未获取到存储")
+
+			time.Sleep(time.Second * 10)
+			continue
+		}
+		path = res[0]["path"]
+		if path == "" {
+			time.Sleep(time.Second)
+			continue
+		}
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(path, &stat); err != nil {
+			fmt.Println(err)
+		}
+		size, _ := si.ProofType.SectorSize()
+		bavail := 1
+		if uint64(stat.Bavail)*uint64(stat.Bsize) < uint64(size)*2 {
+			bavail = 2
+		}
+
+		id = res[0]["id"]
+		sql1 := `update ` + db.TableStorage + ` set running = ? where id = ? `
+		if _, err := db.DBengine.Exec(sql1, bavail, res[0]["id"]); err != nil {
+			log.Error("修改存储失败！", err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+
+		if bavail == 2 {
+			continue
+		}
+		break
+	}
+	defer func() {
+		sql1 := `update ` + db.TableStorage + ` set running = 0 where id = ? `
+		if _, err := db.DBengine.Exec(sql1, id); err != nil {
+			log.Error("恢复存储状态失败！", err.Error())
+		}
+
+	}()
+	cache := filepath.Join(sdr, "/cache/", server_c2.SectorNumString(si.ID))
+	cacheStorage := filepath.Join(path, "/lotusminer/cache/")
+	log.Infof("开始转移：cache: %s ， to：%s", cache, cacheStorage)
+	if err := move(cache, cacheStorage); err != nil {
+		log.Error("转移失败！:", cache, ",", cacheStorage, ",", err.Error())
+		return
+	}
+	sealed := filepath.Join(sdr, "/sealed/", server_c2.SectorNumString(si.ID))
+	sealedStorage := filepath.Join(path, "/lotusminer/sealed/")
+	log.Infof("开始转移：sealed: %s ， to：%s", sealed, sealedStorage)
+	if err := move1(sealed, sealedStorage); err != nil {
+		log.Error("转移失败！:", sealed, ",", path, ",", err.Error())
+		return
+	}
+
+	log.Info("已完成扇区:", si.ID)
+}
+func spt1(ssize abi.SectorSize) abi.RegisteredSealProof {
+	spt1, err := miner.SealProofTypeFromSectorSize(ssize, build.NewestNetworkVersion)
+	if err != nil {
+		panic(err)
+	}
+
+	return spt1
+}
+func move1(from, to string) error {
+
+	log.Info("move sector data ", "from: ", from, "to: ", to)
+
+	var errOut bytes.Buffer
+	var cmd *exec.Cmd
+	cmd = exec.Command("/usr/bin/env", "mv", "-t", to, from)
+
+	cmd.Stderr = &errOut
+	if err := cmd.Run(); err != nil {
+		return xerrors.Errorf("exec mv (stderr: %s): %w", strings.TrimSpace(errOut.String()), err)
+	}
+
+	return nil
+}
+

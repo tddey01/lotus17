@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,11 +18,11 @@ import (
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-graphsync"
 	textselector "github.com/ipld/go-ipld-selector-text-lite"
-	"github.com/libp2p/go-libp2p-core/metrics"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/protocol"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/metrics"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/multiformats/go-multiaddr"
 
 	"github.com/filecoin-project/go-address"
@@ -272,6 +273,8 @@ func init() {
 			Read:   [storiface.FileTypes]uint{2, 3, 0},
 		},
 	})
+	storifaceid := storiface.ID("1399aa04-2625-44b1-bad4-bd07b59b22c4")
+	addExample(&storifaceid)
 
 	// worker specific
 	addExample(storiface.AcquireMove)
@@ -334,7 +337,21 @@ func init() {
 		Conns:           4,
 		FD:              5,
 	})
+	addExample(map[string]bitfield.BitField{
+		"": bitfield.NewFromSet([]uint64{5, 6, 7, 10}),
+	})
 
+	addExample(http.Header{
+		"Authorization": []string{"Bearer ey.."},
+	})
+
+	addExample(map[storiface.SectorFileType]storiface.SectorLocation{
+		storiface.FTSealed: {
+			Local:   false,
+			URL:     "https://example.com/sealingservice/sectors/s-f0123-12345",
+			Headers: nil,
+		},
+	})
 }
 
 func GetAPIType(name, pkg string) (i interface{}, t reflect.Type, permStruct []reflect.Type) {

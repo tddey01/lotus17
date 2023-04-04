@@ -20,6 +20,10 @@ type Config struct {
 
 	PreferNewSectorsForDeals bool
 
+	MinUpgradeSectorExpiration uint64
+
+	MinTargetUpgradeSectorExpiration uint64
+
 	MaxUpgradingSectors uint64
 
 	MakeNewSectorForDeals bool
@@ -48,6 +52,7 @@ type Config struct {
 	AggregateCommits bool
 	MinCommitBatch   int
 	MaxCommitBatch   int
+	MaxWaitCommitBatch   int		//yungojs
 	CommitBatchWait  time.Duration
 	CommitBatchSlack time.Duration
 

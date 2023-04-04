@@ -61,7 +61,7 @@ func (a *WalletAPI) WalletSignMessage(ctx context.Context, k address.Address, ms
 		Extra: mb.RawData(),
 	})
 	if err != nil {
-		return nil, xerrors.Errorf("failed to sign message: %w", err)
+		return nil, xerrors.Errorf("2failed to sign message: %w", err)
 	}
 
 	return &types.SignedMessage{

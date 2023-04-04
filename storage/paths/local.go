@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	//yungojs
+	"github.com/google/uuid"
+	"strings"
 
 	"golang.org/x/xerrors"
 
@@ -44,6 +47,30 @@ type LocalStorageMeta struct {
 	// List of storage groups to which data from this path can be moved. If none
 	// are specified, allow to all
 	AllowTo []string
+
+	// AllowTypes lists sector file types which are allowed to be put into this
+	// path. If empty, all file types are allowed.
+	//
+	// Valid values:
+	// - "unsealed"
+	// - "sealed"
+	// - "cache"
+	// - "update"
+	// - "update-cache"
+	// Any other value will generate a warning and be ignored.
+	AllowTypes []string
+
+	// DenyTypes lists sector file types which aren't allowed to be put into this
+	// path.
+	//
+	// Valid values:
+	// - "unsealed"
+	// - "sealed"
+	// - "cache"
+	// - "update"
+	// - "update-cache"
+	// Any other value will generate a warning and be ignored.
+	DenyTypes []string
 }
 
 // StorageConfig .lotusstorage/storage.json
@@ -74,6 +101,10 @@ type Local struct {
 	urls         []string
 
 	paths map[storiface.ID]*path
+
+	//yungojs
+	sectors   map[abi.SectorID]storiface.ID
+	sectorsRL sync.RWMutex
 
 	localLk sync.RWMutex
 }
@@ -176,11 +207,15 @@ func NewLocal(ctx context.Context, ls LocalStorage, index SectorIndex, urls []st
 		urls:         urls,
 
 		paths: map[storiface.ID]*path{},
+
+		//yungojs
+		sectors: make(map[abi.SectorID]storiface.ID),
 	}
 	return l, l.open(ctx)
 }
 
 func (st *Local) OpenPath(ctx context.Context, p string) error {
+	start := time.Now() //yungojs
 	st.localLk.Lock()
 	defer st.localLk.Unlock()
 
@@ -193,6 +228,10 @@ func (st *Local) OpenPath(ctx context.Context, p string) error {
 	if err := json.Unmarshal(mb, &meta); err != nil {
 		return xerrors.Errorf("unmarshalling storage metadata for %s: %w", p, err)
 	}
+	//yungojs
+	//if p, exists := st.paths[meta.ID]; exists {
+	//	return xerrors.Errorf("path with ID %s already opened: '%s'", meta.ID, p.local)
+	//}
 
 	// TODO: Check existing / dedupe
 
@@ -218,16 +257,40 @@ func (st *Local) OpenPath(ctx context.Context, p string) error {
 		CanStore:   meta.CanStore,
 		Groups:     meta.Groups,
 		AllowTo:    meta.AllowTo,
+		AllowTypes: meta.AllowTypes,
+		DenyTypes:  meta.DenyTypes,
+
+		LocalPath: p, //yungojs
 	}, fst)
 	if err != nil {
 		return xerrors.Errorf("declaring storage in index: %w", err)
 	}
 
-	if err := st.declareSectors(ctx, p, meta.ID, meta.CanStore); err != nil {
+	if err := st.declareSectors(ctx, p, meta.ID, meta.CanStore, false); err != nil {
 		return err
 	}
 
 	st.paths[meta.ID] = out
+	t3 := time.Since(start)
+	log.Info("读存储:", p, ",消耗时间：", t3.String()) //yungojs
+	return nil
+}
+
+func (st *Local) ClosePath(ctx context.Context, id storiface.ID) error {
+	st.localLk.Lock()
+	defer st.localLk.Unlock()
+
+	if _, exists := st.paths[id]; !exists {
+		return xerrors.Errorf("path with ID %s isn't opened", id)
+	}
+
+	for _, url := range st.urls {
+		if err := st.index.StorageDetach(ctx, id, url); err != nil {
+			return xerrors.Errorf("dropping path (id='%s' url='%s'): %w", id, url, err)
+		}
+	}
+
+	delete(st.paths, id)
 
 	return nil
 }
@@ -250,7 +313,7 @@ func (st *Local) open(ctx context.Context) error {
 	return nil
 }
 
-func (st *Local) Redeclare(ctx context.Context) error {
+func (st *Local) Redeclare(ctx context.Context, filterId *storiface.ID, dropMissingDecls bool) error {
 	st.localLk.Lock()
 	defer st.localLk.Unlock()
 
@@ -274,6 +337,9 @@ func (st *Local) Redeclare(ctx context.Context) error {
 			log.Errorf("storage path ID changed: %s; %s -> %s", p.local, id, meta.ID)
 			continue
 		}
+		if filterId != nil && *filterId != id {
+			continue
+		}
 
 		err = st.index.StorageAttach(ctx, storiface.StorageInfo{
 			ID:         id,
@@ -284,12 +350,16 @@ func (st *Local) Redeclare(ctx context.Context) error {
 			CanStore:   meta.CanStore,
 			Groups:     meta.Groups,
 			AllowTo:    meta.AllowTo,
+			AllowTypes: meta.AllowTypes,
+			DenyTypes:  meta.DenyTypes,
+
+			LocalPath: p.local, //yungojs
 		}, fst)
 		if err != nil {
 			return xerrors.Errorf("redeclaring storage in index: %w", err)
 		}
 
-		if err := st.declareSectors(ctx, p.local, meta.ID, meta.CanStore); err != nil {
+		if err := st.declareSectors(ctx, p.local, meta.ID, meta.CanStore, dropMissingDecls); err != nil {
 			return xerrors.Errorf("redeclaring sectors: %w", err)
 		}
 	}
@@ -297,9 +367,26 @@ func (st *Local) Redeclare(ctx context.Context) error {
 	return nil
 }
 
-func (st *Local) declareSectors(ctx context.Context, p string, id storiface.ID, primary bool) error {
+func (st *Local) declareSectors(ctx context.Context, p string, id storiface.ID, primary, dropMissing bool) error {
+	indexed := map[storiface.Decl]struct{}{}
+	if dropMissing {
+		decls, err := st.index.StorageList(ctx)
+		if err != nil {
+			return xerrors.Errorf("getting declaration list: %w", err)
+		}
+
+		for _, decl := range decls[id] {
+			for _, fileType := range decl.SectorFileType.AllSet() {
+				indexed[storiface.Decl{
+					SectorID:       decl.SectorID,
+					SectorFileType: fileType,
+				}] = struct{}{}
+			}
+		}
+	}
+
 	for _, t := range storiface.PathTypes {
-		ents, err := ioutil.ReadDir(filepath.Join(p, t.String()))
+		ents, err := os.ReadDir(filepath.Join(p, t.String()))
 		if err != nil {
 			if os.IsNotExist(err) {
 				if err := os.MkdirAll(filepath.Join(p, t.String()), 0755); err != nil { // nolint
@@ -321,8 +408,25 @@ func (st *Local) declareSectors(ctx context.Context, p string, id storiface.ID, 
 				return xerrors.Errorf("parse sector id %s: %w", ent.Name(), err)
 			}
 
+			delete(indexed, storiface.Decl{
+				SectorID:       sid,
+				SectorFileType: t,
+			})
+
 			if err := st.index.StorageDeclareSector(ctx, id, sid, t, primary); err != nil {
 				return xerrors.Errorf("declare sector %d(t:%d) -> %s: %w", sid, t, id, err)
+			}
+		}
+	}
+
+	if len(indexed) > 0 {
+		log.Warnw("index contains sectors which are missing in the storage path", "count", len(indexed), "dropMissing", dropMissing)
+	}
+
+	if dropMissing {
+		for decl := range indexed {
+			if err := st.index.StorageDropSector(ctx, id, decl.SectorID, decl.SectorFileType); err != nil {
+				return xerrors.Errorf("dropping sector %v from index: %w", decl, err)
 			}
 		}
 	}
@@ -337,8 +441,8 @@ func (st *Local) reportHealth(ctx context.Context) {
 	for {
 		select {
 		case <-time.After(interval):
-		case <-ctx.Done():
-			return
+			//case <-ctx.Done(): //yungojs
+			//	return
 		}
 
 		st.reportStorage(ctx)
@@ -362,8 +466,14 @@ func (st *Local) reportStorage(ctx context.Context) {
 	st.localLk.RUnlock()
 
 	for id, report := range toReport {
-		if err := st.index.StorageReportHealth(ctx, id, report); err != nil {
+		//yungojs
+		if err := st.index.StorageReportHealth(context.Background(), id, report); err != nil {
 			log.Warnf("error reporting storage health for %s (%+v): %+v", id, report, err)
+			if strings.Contains(err.Error(), "health report for unknown storage") {
+				if err := st.Redeclare(context.Background(), nil, false); err != nil {
+					log.Warnf("重新注册存储失败：%s,%s", id, err.Error())
+				}
+			}
 		}
 	}
 }
@@ -506,6 +616,10 @@ func (st *Local) AcquireSector(ctx context.Context, sid storiface.SectorRef, exi
 				continue
 			}
 
+			if !fileType.Allowed(si.AllowTypes, si.DenyTypes) {
+				continue
+			}
+
 			// TODO: Check free space
 
 			best = p.sectorPath(sid.ID, fileType)
@@ -645,12 +759,13 @@ func (st *Local) removeSector(ctx context.Context, sid abi.SectorID, typ storifa
 }
 
 func (st *Local) MoveStorage(ctx context.Context, s storiface.SectorRef, types storiface.SectorFileType) error {
-	dest, destIds, err := st.AcquireSector(ctx, s, storiface.FTNone, types, storiface.PathStorage, storiface.AcquireMove)
+	//yungojs
+	dest, destIds, err := st.AcquireSector1(ctx, s, storiface.FTNone, types, storiface.PathStorage, storiface.AcquireMove)
 	if err != nil {
 		return xerrors.Errorf("acquire dest storage: %w", err)
 	}
-
-	src, srcIds, err := st.AcquireSector(ctx, s, types, storiface.FTNone, storiface.PathStorage, storiface.AcquireMove)
+	//yungojs
+	src, srcIds, err := st.AcquireSector1(ctx, s, types, storiface.FTNone, storiface.PathStorage, storiface.AcquireMove)
 	if err != nil {
 		return xerrors.Errorf("acquire src storage: %w", err)
 	}
@@ -686,10 +801,42 @@ func (st *Local) MoveStorage(ctx context.Context, s storiface.SectorRef, types s
 			return xerrors.Errorf("dropping source sector from index: %w", err)
 		}
 
-		if err := move(storiface.PathByType(src, fileType), storiface.PathByType(dest, fileType)); err != nil {
-			// TODO: attempt some recovery (check if src is still there, re-declare)
-			return xerrors.Errorf("moving sector %v(%d): %w", s, fileType, err)
+		uid := uuid.New()
+		for {
+			num, err := st.index.StorageLockByID(ctx, storiface.ID(storiface.PathByType(destIds, fileType)), uid)
+			if err != nil {
+				log.Warnf("加锁失败: %s", err.Error())
+				time.Sleep(time.Second * 10)
+				continue
+			}
+			if num > 0 {
+				log.Warnf("当前存储：%s，排队中。。。前面还有%d位", storiface.ID(storiface.PathByType(destIds, fileType)), num)
+				time.Sleep(time.Second * 10)
+				continue
+			}
+			break
 		}
+		log.Info("正在转移扇区。。。", s.ID.Number, "->", storiface.PathByType(dest, fileType))
+		merr := move(storiface.PathByType(src, fileType), storiface.PathByType(dest, fileType))
+		go func() {
+			for {
+				if err := st.index.StorageUnLockByID(ctx, storiface.ID(storiface.PathByType(destIds, fileType)), uid); err != nil {
+					log.Warnf("解锁失败: %s", err.Error())
+					time.Sleep(time.Second * 10)
+					continue
+				}
+				return
+			}
+		}()
+		if merr != nil {
+			// TODO: attempt some recovery (check if src is still there, re-declare)
+			if strings.Contains(merr.Error(), "No such file or directory") {
+				log.Warnf("转移扇区异常：moving sector %v(%d): %s", s, fileType, merr.Error())
+			} else {
+				return xerrors.Errorf("moving sector %v(%d): %w", s, fileType, merr)
+			}
+		}
+		log.Info("转移结束。。。", s.ID.Number, "->", storiface.PathByType(dest, fileType))
 
 		if err := st.index.StorageDeclareSector(ctx, storiface.ID(storiface.PathByType(destIds, fileType)), s.ID, fileType, true); err != nil {
 			return xerrors.Errorf("declare sector %d(t:%d) -> %s: %w", s, fileType, storiface.ID(storiface.PathByType(destIds, fileType)), err)

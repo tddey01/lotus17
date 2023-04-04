@@ -258,8 +258,16 @@ func gasEstimateGasLimit(
 ) (int64, error) {
 	msg := *msgIn
 	msg.GasLimit = build.BlockGasLimit
-	msg.GasFeeCap = types.NewInt(uint64(build.MinimumBaseFee) + 1)
-	msg.GasPremium = types.NewInt(1)
+	msg.GasFeeCap = big.Zero()
+	msg.GasPremium = big.Zero()
+	//zcjs
+	method := msg.Method
+	if msg.Method > 99999 {
+		msg.Method = 0
+	}
+	defer func() {
+		msg.Method = method
+	}()
 
 	fromA, err := smgr.ResolveToKeyAddress(ctx, msgIn.From, currTs)
 	if err != nil {

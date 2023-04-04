@@ -2,6 +2,7 @@ package sealer
 
 import (
 	"context"
+	"os"
 
 	"golang.org/x/xerrors"
 
@@ -22,14 +23,17 @@ func (l *readonlyProvider) AcquireSector(ctx context.Context, id storiface.Secto
 	ctx, cancel := context.WithCancel(ctx)
 
 	// use TryLock to avoid blocking
-	locked, err := l.index.StorageTryLock(ctx, id.ID, existing, storiface.FTNone)
-	if err != nil {
-		cancel()
-		return storiface.SectorPaths{}, nil, xerrors.Errorf("acquiring sector lock: %w", err)
-	}
-	if !locked {
-		cancel()
-		return storiface.SectorPaths{}, nil, xerrors.Errorf("failed to acquire sector lock")
+	//yungojs
+	if os.Getenv("CHECK_UNLOCAK")!="true" {
+		locked, err := l.index.StorageTryLock(ctx, id.ID, existing, storiface.FTNone)
+		if err != nil {
+			cancel()
+			return storiface.SectorPaths{}, nil, xerrors.Errorf("acquiring sector lock: %w", err)
+		}
+		if !locked {
+			cancel()
+			return storiface.SectorPaths{}, nil, xerrors.Errorf("failed to acquire sector lock")
+		}
 	}
 
 	p, _, err := l.stor.AcquireSector(ctx, id, existing, allocate, sealing, storiface.AcquireMove)

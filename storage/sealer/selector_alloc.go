@@ -34,6 +34,8 @@ func (s *allocSelector) Ok(ctx context.Context, task sealtasks.TaskType, spt abi
 	if _, supported := tasks[task]; !supported {
 		return false, false, nil
 	}
+	//yungojs
+	return true,true,nil
 
 	paths, err := whnd.workerRpc.Paths(ctx)
 	if err != nil {
@@ -55,13 +57,20 @@ func (s *allocSelector) Ok(ctx context.Context, task sealtasks.TaskType, spt abi
 		return false, false, xerrors.Errorf("finding best alloc storage: %w", err)
 	}
 
+	requested := s.alloc
+
 	for _, info := range best {
 		if _, ok := have[info.ID]; ok {
-			return true, false, nil
+			requested = requested.SubAllowed(info.AllowTypes, info.DenyTypes)
+
+			// got all paths
+			if requested == storiface.FTNone {
+				break
+			}
 		}
 	}
 
-	return false, false, nil
+	return requested == storiface.FTNone, false, nil
 }
 
 func (s *allocSelector) Cmp(ctx context.Context, task sealtasks.TaskType, a, b *WorkerHandle) (bool, error) {

@@ -11,12 +11,14 @@ import (
 )
 
 func (m *Manager) WorkerStats(ctx context.Context) map[uuid.UUID]storiface.WorkerStats {
-	m.sched.workersLk.RLock()
+	//yungojs
+	//m.sched.workersLk.RLock()
 
 	out := map[uuid.UUID]storiface.WorkerStats{}
 
 	cb := func(ctx context.Context, id storiface.WorkerID, handle *WorkerHandle) {
-		handle.lk.Lock()
+		//yungojs
+		//handle.lk.Lock()
 
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
@@ -46,15 +48,15 @@ func (m *Manager) WorkerStats(ctx context.Context) map[uuid.UUID]storiface.Worke
 		for tt, count := range handle.active.taskCounters {
 			out[uuid.UUID(id)].TaskCounts[tt.String()] = count
 		}
-
-		handle.lk.Unlock()
+		//yungojs
+		//handle.lk.Unlock()
 	}
 
 	for id, handle := range m.sched.Workers {
 		cb(ctx, id, handle)
 	}
-
-	m.sched.workersLk.RUnlock()
+	//yungojs
+	//m.sched.workersLk.RUnlock()
 
 	//list post workers
 	m.winningPoStSched.WorkerStats(ctx, cb)
@@ -76,26 +78,26 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 		out[uuid.UUID(t.worker)] = append(out[uuid.UUID(t.worker)], t.job)
 		calls[t.job.ID] = struct{}{}
 	}
+	//yungojs
+	//m.sched.workersLk.RLock()
 
-	m.sched.workersLk.RLock()
+	//for id, handle := range m.sched.Workers {
+	//	handle.wndLk.Lock()
+	//	for wi, window := range handle.activeWindows {
+	//		for _, request := range window.Todo {
+	//			out[uuid.UUID(id)] = append(out[uuid.UUID(id)], storiface.WorkerJob{
+	//				ID:      storiface.UndefCall,
+	//				Sector:  request.Sector.ID,
+	//				Task:    request.TaskType,
+	//				RunWait: wi + 2,
+	//				Start:   request.start,
+	//			})
+	//		}
+	//	}
+	//	handle.wndLk.Unlock()
+	//}
 
-	for id, handle := range m.sched.Workers {
-		handle.wndLk.Lock()
-		for wi, window := range handle.activeWindows {
-			for _, request := range window.Todo {
-				out[uuid.UUID(id)] = append(out[uuid.UUID(id)], storiface.WorkerJob{
-					ID:      storiface.UndefCall,
-					Sector:  request.Sector.ID,
-					Task:    request.TaskType,
-					RunWait: wi + 2,
-					Start:   request.start,
-				})
-			}
-		}
-		handle.wndLk.Unlock()
-	}
-
-	m.sched.workersLk.RUnlock()
+	//m.sched.workersLk.RUnlock()
 
 	m.workLk.Lock()
 	defer m.workLk.Unlock()
@@ -118,6 +120,14 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 		if ws.Status == wsDone {
 			wait = storiface.RWRetDone
 		}
+		//yungojs
+		m.sched.hostnameipLk.RLock()
+		ip := m.sched.hostnameip[ws.WorkerHostname]
+		m.sched.hostnameipLk.RUnlock()
+		if ip == ""{
+			log.Info("IP为空：",ws.WorkerHostname)
+			ip = ws.WorkerHostname
+		}
 
 		out[uuid.UUID{}] = append(out[uuid.UUID{}], storiface.WorkerJob{
 			ID:       id,
@@ -125,7 +135,7 @@ func (m *Manager) WorkerJobs() map[uuid.UUID][]storiface.WorkerJob {
 			Task:     work.Method,
 			RunWait:  wait,
 			Start:    time.Unix(ws.StartTime, 0),
-			Hostname: ws.WorkerHostname,
+			Hostname: ip,		//yungojs
 		})
 	}
 

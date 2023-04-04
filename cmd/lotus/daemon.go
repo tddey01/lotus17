@@ -9,13 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"net/http"
-	"os"
-	"runtime/pprof"
-	"strings"
-
+	"github.com/filecoin-project/lotus/extern/authenticator"
 	metricsprom "github.com/ipfs/go-metrics-prometheus"
 	"github.com/mitchellh/go-homedir"
 	"github.com/multiformats/go-multiaddr"
@@ -26,6 +20,12 @@ import (
 	"go.opencensus.io/tag"
 	"golang.org/x/xerrors"
 	"gopkg.in/cheggaaa/pb.v1"
+	"io"
+	"io/ioutil"
+	"net/http"
+	"os"
+	"runtime/pprof"
+	"strings"
 
 	"github.com/filecoin-project/go-jsonrpc"
 	"github.com/filecoin-project/go-paramfetch"
@@ -158,6 +158,10 @@ var DaemonCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
+		//zcjs
+		if err := authenticator.AuthToken(); err != nil {
+			return err
+		}
 		isLite := cctx.Bool("lite")
 
 		err := runmetrics.Enable(runmetrics.RunMetricOptions{

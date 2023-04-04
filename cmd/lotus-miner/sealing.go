@@ -57,7 +57,7 @@ func workersCmd(sealing bool) *cli.Command {
 				color.NoColor = !cctx.Bool("color")
 			}
 
-			nodeApi, closer, err := lcli.GetStorageMinerAPI(cctx)
+			minerApi, closer, err := lcli.GetStorageMinerAPI(cctx)
 			if err != nil {
 				return err
 			}
@@ -65,7 +65,7 @@ func workersCmd(sealing bool) *cli.Command {
 
 			ctx := lcli.ReqContext(cctx)
 
-			stats, err := nodeApi.WorkerStats(ctx)
+			stats, err := minerApi.WorkerStats(ctx)
 			if err != nil {
 				return err
 			}
@@ -153,22 +153,29 @@ func workersCmd(sealing bool) *cli.Command {
 				}
 
 				// CPU use
-
-				fmt.Printf("\tCPU:  [%s] %d/%d core(s) in use\n",
-					lcli.BarString(float64(stat.Info.Resources.CPUs), 0, float64(stat.CpuUse)), stat.CpuUse, stat.Info.Resources.CPUs)
+				//yungojs
+				//fmt.Printf("\tCPU:  [%s] %d/%d core(s) in use\n",
+				//	lcli.BarString(float64(stat.Info.Resources.CPUs), 0, float64(stat.CpuUse)), stat.CpuUse, stat.Info.Resources.CPUs)
+				fmt.Printf("\tCPU:  %d/%d core(s) in use\n",
+					stat.CpuUse, stat.Info.Resources.CPUs)
 
 				// RAM use
 
-				ramTotal := stat.Info.Resources.MemPhysical
+				//ramTotal := stat.Info.Resources.MemPhysical
 				ramTasks := stat.MemUsedMin
 				ramUsed := stat.Info.Resources.MemUsed
 				var ramReserved uint64 = 0
 				if ramUsed > ramTasks {
 					ramReserved = ramUsed - ramTasks
 				}
-				ramBar := lcli.BarString(float64(ramTotal), float64(ramReserved), float64(ramTasks))
+				//yungojs
+				//ramBar := lcli.BarString(float64(ramTotal), float64(ramReserved), float64(ramTasks))
 
-				fmt.Printf("\tRAM:  [%s] %d%% %s/%s\n", ramBar,
+				//fmt.Printf("\tRAM:  [%s] %d%% %s/%s\n", ramBar,
+				//	(ramTasks+ramReserved)*100/stat.Info.Resources.MemPhysical,
+				//	types.SizeStr(types.NewInt(ramTasks+ramUsed)),
+				//	types.SizeStr(types.NewInt(stat.Info.Resources.MemPhysical)))
+				fmt.Printf("\tRAM:  %d%% %s/%s\n",
 					(ramTasks+ramReserved)*100/stat.Info.Resources.MemPhysical,
 					types.SizeStr(types.NewInt(ramTasks+ramUsed)),
 					types.SizeStr(types.NewInt(stat.Info.Resources.MemPhysical)))
@@ -182,18 +189,28 @@ func workersCmd(sealing bool) *cli.Command {
 				if vmemUsed > vmemTasks {
 					vmemReserved = vmemUsed - vmemTasks
 				}
-				vmemBar := lcli.BarString(float64(vmemTotal), float64(vmemReserved), float64(vmemTasks))
+				//yungojs
+				//vmemBar := lcli.BarString(float64(vmemTotal), float64(vmemReserved), float64(vmemTasks))
 
-				fmt.Printf("\tVMEM: [%s] %d%% %s/%s\n", vmemBar,
+				//fmt.Printf("\tVMEM: [%s] %d%% %s/%s\n", vmemBar,
+				//	(vmemTasks+vmemReserved)*100/vmemTotal,
+				//	types.SizeStr(types.NewInt(vmemTasks+vmemReserved)),
+				//	types.SizeStr(types.NewInt(vmemTotal)))
+
+				fmt.Printf("\tVMEM:  %d%% %s/%s\n",
 					(vmemTasks+vmemReserved)*100/vmemTotal,
 					types.SizeStr(types.NewInt(vmemTasks+vmemReserved)),
 					types.SizeStr(types.NewInt(vmemTotal)))
-
 				// GPU use
 
 				if len(stat.Info.Resources.GPUs) > 0 {
-					gpuBar := lcli.BarString(float64(len(stat.Info.Resources.GPUs)), 0, stat.GpuUsed)
-					fmt.Printf("\tGPU:  [%s] %.f%% %.2f/%d gpu(s) in use\n", color.GreenString(gpuBar),
+					//yungojs
+					//gpuBar := lcli.BarString(float64(len(stat.Info.Resources.GPUs)), 0, stat.GpuUsed)
+					//fmt.Printf("\tGPU:  [%s] %.f%% %.2f/%d gpu(s) in use\n", color.GreenString(gpuBar),
+					//	stat.GpuUsed*100/float64(len(stat.Info.Resources.GPUs)),
+					//	stat.GpuUsed, len(stat.Info.Resources.GPUs))
+
+					fmt.Printf("\tGPU:  %.f%% %.2f/%d gpu(s) in use\n",
 						stat.GpuUsed*100/float64(len(stat.Info.Resources.GPUs)),
 						stat.GpuUsed, len(stat.Info.Resources.GPUs))
 				}
@@ -233,7 +250,7 @@ var sealingJobsCmd = &cli.Command{
 			color.NoColor = !cctx.Bool("color")
 		}
 
-		nodeApi, closer, err := lcli.GetStorageMinerAPI(cctx)
+		minerApi, closer, err := lcli.GetStorageMinerAPI(cctx)
 		if err != nil {
 			return err
 		}
@@ -241,7 +258,7 @@ var sealingJobsCmd = &cli.Command{
 
 		ctx := lcli.ReqContext(cctx)
 
-		jobs, err := nodeApi.WorkerJobs(ctx)
+		jobs, err := minerApi.WorkerJobs(ctx)
 		if err != nil {
 			return xerrors.Errorf("getting worker jobs: %w", err)
 		}
@@ -275,13 +292,15 @@ var sealingJobsCmd = &cli.Command{
 
 		workerHostnames := map[uuid.UUID]string{}
 
-		wst, err := nodeApi.WorkerStats(ctx)
+		wst, err := minerApi.WorkerStats(ctx)
 		if err != nil {
 			return xerrors.Errorf("getting worker stats: %w", err)
 		}
 
 		for wid, st := range wst {
-			workerHostnames[wid] = st.Info.Hostname
+			//yungojs
+			workerHostnames[wid] = st.Info.Ip
+			//workerHostnames[wid] = st.Info.Hostname
 		}
 
 		tw := tabwriter.NewWriter(os.Stdout, 2, 4, 2, ' ', 0)
@@ -337,7 +356,7 @@ var sealingSchedDiagCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
-		nodeApi, closer, err := lcli.GetStorageMinerAPI(cctx)
+		minerApi, closer, err := lcli.GetStorageMinerAPI(cctx)
 		if err != nil {
 			return err
 		}
@@ -345,7 +364,7 @@ var sealingSchedDiagCmd = &cli.Command{
 
 		ctx := lcli.ReqContext(cctx)
 
-		st, err := nodeApi.SealingSchedDiag(ctx, cctx.Bool("force-sched"))
+		st, err := minerApi.SealingSchedDiag(ctx, cctx.Bool("force-sched"))
 		if err != nil {
 			return err
 		}
@@ -365,12 +384,18 @@ var sealingAbortCmd = &cli.Command{
 	Name:      "abort",
 	Usage:     "Abort a running job",
 	ArgsUsage: "[callid]",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "sched",
+			Usage: "Specifies that the argument is UUID of the request to be removed from scheduler",
+		},
+	},
 	Action: func(cctx *cli.Context) error {
-		if cctx.Args().Len() != 1 {
-			return xerrors.Errorf("expected 1 argument")
+		if cctx.NArg() != 1 {
+			return lcli.IncorrectNumArgs(cctx)
 		}
 
-		nodeApi, closer, err := lcli.GetStorageMinerAPI(cctx)
+		minerApi, closer, err := lcli.GetStorageMinerAPI(cctx)
 		if err != nil {
 			return err
 		}
@@ -378,7 +403,15 @@ var sealingAbortCmd = &cli.Command{
 
 		ctx := lcli.ReqContext(cctx)
 
-		jobs, err := nodeApi.WorkerJobs(ctx)
+		if cctx.Bool("sched") {
+			err = minerApi.SealingRemoveRequest(ctx, uuid.Must(uuid.Parse(cctx.Args().First())))
+			if err != nil {
+				return xerrors.Errorf("Failed to removed the request with UUID %s: %w", cctx.Args().First(), err)
+			}
+			return nil
+		}
+
+		jobs, err := minerApi.WorkerJobs(ctx)
 		if err != nil {
 			return xerrors.Errorf("getting worker jobs: %w", err)
 		}
@@ -401,7 +434,7 @@ var sealingAbortCmd = &cli.Command{
 
 		fmt.Printf("aborting job %s, task %s, sector %d, running on host %s\n", job.ID.String(), job.Task.Short(), job.Sector.Number, job.Hostname)
 
-		return nodeApi.SealingAbort(ctx, job.ID)
+		return minerApi.SealingAbort(ctx, job.ID)
 	},
 }
 
@@ -416,11 +449,11 @@ var sealingDataCidCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
-		if cctx.Args().Len() < 1 || cctx.Args().Len() > 2 {
-			return xerrors.Errorf("expected 1 or 2 arguments")
+		if cctx.NArg() < 1 || cctx.NArg() > 2 {
+			return lcli.ShowHelp(cctx, xerrors.Errorf("expected 1 or 2 arguments"))
 		}
 
-		nodeApi, closer, err := lcli.GetStorageMinerAPI(cctx)
+		minerApi, closer, err := lcli.GetStorageMinerAPI(cctx)
 		if err != nil {
 			return err
 		}
@@ -470,7 +503,7 @@ var sealingDataCidCmd = &cli.Command{
 		}
 
 		var psize abi.PaddedPieceSize
-		if cctx.Args().Len() == 2 {
+		if cctx.NArg() == 2 {
 			rps, err := humanize.ParseBytes(cctx.Args().Get(1))
 			if err != nil {
 				return xerrors.Errorf("parsing piece size: %w", err)
@@ -486,7 +519,7 @@ var sealingDataCidCmd = &cli.Command{
 			psize = padreader.PaddedSize(sz).Padded()
 		}
 
-		pc, err := nodeApi.ComputeDataCid(ctx, psize.Unpadded(), r)
+		pc, err := minerApi.ComputeDataCid(ctx, psize.Unpadded(), r)
 		if err != nil {
 			return xerrors.Errorf("computing data CID: %w", err)
 		}

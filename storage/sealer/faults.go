@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -74,24 +75,25 @@ func (m *Manager) CheckProvable(ctx context.Context, pp abi.RegisteredPoStProof,
 				addBad(sector.ID, fmt.Sprintf("getting commR: %s", err))
 				return
 			}
+			//yungojs
+			if os.Getenv("CHECK_UNLOCAK")!="true" {
+				toLock := storiface.FTSealed | storiface.FTCache
+				if update {
+					toLock = storiface.FTUpdate | storiface.FTUpdateCache
+				}
 
-			toLock := storiface.FTSealed | storiface.FTCache
-			if update {
-				toLock = storiface.FTUpdate | storiface.FTUpdateCache
+				locked, err := m.index.StorageTryLock(ctx, sector.ID, toLock, storiface.FTNone)
+				if err != nil {
+					addBad(sector.ID, fmt.Sprintf("tryLock error: %s", err))
+					return
+				}
+
+				if !locked {
+					log.Warnw("CheckProvable Sector FAULT: can't acquire read lock", "sector", sector)
+					addBad(sector.ID, fmt.Sprint("can't acquire read lock"))
+					return
+				}
 			}
-
-			locked, err := m.index.StorageTryLock(ctx, sector.ID, toLock, storiface.FTNone)
-			if err != nil {
-				addBad(sector.ID, fmt.Sprintf("tryLock error: %s", err))
-				return
-			}
-
-			if !locked {
-				log.Warnw("CheckProvable Sector FAULT: can't acquire read lock", "sector", sector)
-				addBad(sector.ID, fmt.Sprint("can't acquire read lock"))
-				return
-			}
-
 			wpp, err := sector.ProofType.RegisteredWindowPoStProof()
 			if err != nil {
 				addBad(sector.ID, fmt.Sprint("can't get proof type"))

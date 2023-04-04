@@ -24,6 +24,8 @@ func (w WorkerID) String() string {
 type WorkerInfo struct {
 	Hostname string
 
+	Ip  string    //yungojs
+	Wid uuid.UUID //yungojs
 	// IgnoreResources indicates whether the worker's available resources should
 	// be used ignored (true) or used (false) for the purposes of scheduling and
 	// task assignment. Only supported on local workers. Used for testing.
@@ -106,6 +108,8 @@ type WorkerJob struct {
 type CallID struct {
 	Sector abi.SectorID
 	ID     uuid.UUID
+
+	TT     sealtasks.TaskType //yungojs
 }
 
 func (c CallID) String() string {
@@ -115,8 +119,12 @@ func (c CallID) String() string {
 var _ fmt.Stringer = &CallID{}
 
 var UndefCall CallID
-
+//yungojs
+type TaskCount struct {
+	P1count int
+}
 type WorkerCalls interface {
+
 	// async
 	DataCid(ctx context.Context, pieceSize abi.UnpaddedPieceSize, pieceData Data) (CallID, error)
 	AddPiece(ctx context.Context, sector SectorRef, pieceSizes []abi.UnpaddedPieceSize, newPieceSize abi.UnpaddedPieceSize, pieceData Data) (CallID, error)
@@ -134,6 +142,7 @@ type WorkerCalls interface {
 	MoveStorage(ctx context.Context, sector SectorRef, types SectorFileType) (CallID, error)
 	UnsealPiece(context.Context, SectorRef, UnpaddedByteIndex, abi.UnpaddedPieceSize, abi.SealRandomness, cid.Cid) (CallID, error)
 	Fetch(context.Context, SectorRef, SectorFileType, PathType, AcquireMode) (CallID, error)
+	DownloadSectorData(ctx context.Context, sector SectorRef, finalized bool, src map[SectorFileType]SectorLocation) (CallID, error)
 
 	// sync
 	GenerateWinningPoSt(ctx context.Context, ppt abi.RegisteredPoStProof, mid abi.ActorID, sectors []PostSectorChallenge, randomness abi.PoStRandomness) ([]proof.PoStProof, error)
@@ -215,5 +224,6 @@ type WorkerReturn interface {
 	ReturnMoveStorage(ctx context.Context, callID CallID, err *CallError) error
 	ReturnUnsealPiece(ctx context.Context, callID CallID, err *CallError) error
 	ReturnReadPiece(ctx context.Context, callID CallID, ok bool, err *CallError) error
+	ReturnDownloadSector(ctx context.Context, callID CallID, err *CallError) error
 	ReturnFetch(ctx context.Context, callID CallID, err *CallError) error
 }

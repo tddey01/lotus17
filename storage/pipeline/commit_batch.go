@@ -13,18 +13,19 @@ import (
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/go-bitfield"
 	"github.com/filecoin-project/go-state-types/abi"
+	actorstypes "github.com/filecoin-project/go-state-types/actors"
 	"github.com/filecoin-project/go-state-types/big"
 	"github.com/filecoin-project/go-state-types/builtin"
-	"github.com/filecoin-project/go-state-types/builtin/v8/miner"
+	"github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	"github.com/filecoin-project/go-state-types/network"
 	"github.com/filecoin-project/go-state-types/proof"
 
 	"github.com/filecoin-project/lotus/api"
 	"github.com/filecoin-project/lotus/build"
-	"github.com/filecoin-project/lotus/chain/actors"
 	"github.com/filecoin-project/lotus/chain/actors/policy"
 	"github.com/filecoin-project/lotus/chain/types"
 	"github.com/filecoin-project/lotus/node/config"
+	"github.com/filecoin-project/lotus/node/modules/dtypes"
 	"github.com/filecoin-project/lotus/storage/pipeline/sealiface"
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
 )
@@ -43,6 +44,12 @@ type CommitBatcherApi interface {
 	StateMinerInitialPledgeCollateral(context.Context, address.Address, miner.SectorPreCommitInfo, types.TipSetKey) (big.Int, error)
 	StateNetworkVersion(ctx context.Context, tsk types.TipSetKey) (network.Version, error)
 	StateMinerAvailableBalance(context.Context, address.Address, types.TipSetKey) (big.Int, error)
+
+	// Address selector
+	WalletBalance(context.Context, address.Address) (types.BigInt, error)
+	WalletHas(context.Context, address.Address) (bool, error)
+	StateAccountKey(context.Context, address.Address, types.TipSetKey) (address.Address, error)
+	StateLookupID(context.Context, address.Address, types.TipSetKey) (address.Address, error)
 }
 
 type AggregateInput struct {
@@ -55,9 +62,9 @@ type CommitBatcher struct {
 	api       CommitBatcherApi
 	maddr     address.Address
 	mctx      context.Context
-	addrSel   AddrSel
+	addrSel   AddressSelector
 	feeCfg    config.MinerFeeConfig
-	getConfig GetSealingConfigFunc
+	getConfig dtypes.GetSealingConfigFunc
 	prover    storiface.Prover
 
 	cutoffs map[abi.SectorNumber]time.Time
@@ -69,7 +76,7 @@ type CommitBatcher struct {
 	lk                    sync.Mutex
 }
 
-func NewCommitBatcher(mctx context.Context, maddr address.Address, api CommitBatcherApi, addrSel AddrSel, feeCfg config.MinerFeeConfig, getConfig GetSealingConfigFunc, prov storiface.Prover) *CommitBatcher {
+func NewCommitBatcher(mctx context.Context, maddr address.Address, api CommitBatcherApi, addrSel AddressSelector, feeCfg config.MinerFeeConfig, getConfig dtypes.GetSealingConfigFunc, prov storiface.Prover) *CommitBatcher {
 	b := &CommitBatcher{
 		api:       api,
 		maddr:     maddr,
@@ -196,42 +203,59 @@ func (b *CommitBatcher) maybeStartBatch(notif bool) ([]sealiface.CommitBatchRes,
 	if err != nil {
 		return nil, xerrors.Errorf("getting config: %w", err)
 	}
-
-	if notif && total < cfg.MaxCommitBatch {
-		return nil, nil
-	}
+	//yungojs
+	//if notif && total < cfg.MaxCommitBatch {
+	//	return nil, nil
+	//}
 
 	var res []sealiface.CommitBatchRes
 
-	ts, err := b.api.ChainHead(b.mctx)
-	if err != nil {
-		return nil, err
-	}
-
-	blackedOut := func() bool {
-		const nv16BlackoutWindow = abi.ChainEpoch(20) // a magik number
-		if ts.Height() <= build.UpgradeSkyrHeight && build.UpgradeSkyrHeight-ts.Height() < nv16BlackoutWindow {
-			return true
+	//yungojs
+	//blackedOut := func() bool {
+	//	const nv16BlackoutWindow = abi.ChainEpoch(20) // a magik number
+	//	if ts.Height() <= build.UpgradeSkyrHeight && build.UpgradeSkyrHeight-ts.Height() < nv16BlackoutWindow {
+	//		return true
+	//	}
+	//	return false
+	//}
+	//
+	//individual := (total < cfg.MinCommitBatch) || (total < miner.MinAggregatedSectors) || blackedOut()
+	//
+	//if !individual && !cfg.AggregateAboveBaseFee.Equals(big.Zero()) {
+	//	if ts.MinTicketBlock().ParentBaseFee.LessThan(cfg.AggregateAboveBaseFee) {
+	//		individual = true
+	//	}
+	//}
+	//
+	//if individual {
+	//	res, err = b.processIndividually(cfg)
+	//} else {
+	//	res, err = b.processBatch(cfg)
+	//}
+	if !cfg.AggregateAboveBaseFee.Equals(big.Zero()) {
+		ts, err := b.api.ChainHead(b.mctx)
+		if err != nil {
+			return nil, err
 		}
-		return false
-	}
-
-	individual := (total < cfg.MinCommitBatch) || (total < miner.MinAggregatedSectors) || blackedOut()
-
-	if !individual && !cfg.AggregateAboveBaseFee.Equals(big.Zero()) {
-		if ts.MinTicketBlock().ParentBaseFee.LessThan(cfg.AggregateAboveBaseFee) {
-			individual = true
+		if !ts.MinTicketBlock().ParentBaseFee.LessThan(cfg.AggregateAboveBaseFee) {
+			return nil,nil
 		}
-	}
+		if total < 4 {
+			res, err = b.processIndividually(cfg)
+		}else{
+			res, err = b.processBatch(cfg)
+		}
+	}else{
+		if notif && total < cfg.MaxCommitBatch {
+			log.Info("未设置basefree！,total:",total)
+			return nil, nil
+		}
 
-	if individual {
-		res, err = b.processIndividually(cfg)
-	} else {
 		res, err = b.processBatch(cfg)
 	}
 
 	if err != nil {
-		log.Warnf("CommitBatcher maybeStartBatch individual:%v processBatch %v", individual, err)
+		log.Warnf("CommitBatcher maybeStartBatch processBatch %v", err)
 	}
 
 	if err != nil && len(res) == 0 {
@@ -346,8 +370,12 @@ func (b *CommitBatcher) processBatch(cfg sealiface.Config) ([]sealiface.CommitBa
 	}
 
 	maxFee := b.feeCfg.MaxCommitBatchGasFee.FeeForSectors(len(infos))
+	//yungojs
+	bf := ts.MinTicketBlock().ParentBaseFee
+	n := len(b.todo)-len(infos)
+	log.Info("发布消息：", len(infos),"，basefee：",bf.String(),"，剩余：",n)
+	aggFeeRaw, err := policy.AggregateProveCommitNetworkFee(nv, len(infos), bf)
 
-	aggFeeRaw, err := policy.AggregateProveCommitNetworkFee(nv, len(infos), ts.MinTicketBlock().ParentBaseFee)
 	if err != nil {
 		log.Errorf("getting aggregate commit network fee: %s", err)
 		return []sealiface.CommitBatchRes{res}, xerrors.Errorf("getting aggregate commit network fee: %s", err)
@@ -363,7 +391,7 @@ func (b *CommitBatcher) processBatch(cfg sealiface.Config) ([]sealiface.CommitBa
 
 	goodFunds := big.Add(maxFee, needFunds)
 
-	from, _, err := b.addrSel(b.mctx, mi, api.CommitAddr, goodFunds, needFunds)
+	from, _, err := b.addrSel.AddressFor(b.mctx, b.api, mi, api.CommitAddr, goodFunds, needFunds)
 	if err != nil {
 		return []sealiface.CommitBatchRes{res}, xerrors.Errorf("no good address found: %w", err)
 	}
@@ -458,7 +486,7 @@ func (b *CommitBatcher) processSingle(cfg sealiface.Config, mi api.MinerInfo, av
 
 	goodFunds := big.Add(collateral, big.Int(b.feeCfg.MaxCommitGasFee))
 
-	from, _, err := b.addrSel(b.mctx, mi, api.CommitAddr, goodFunds, collateral)
+	from, _, err := b.addrSel.AddressFor(b.mctx, b.api, mi, api.CommitAddr, goodFunds, collateral)
 	if err != nil {
 		return cid.Undef, xerrors.Errorf("no good address to send commit message from: %w", err)
 	}
@@ -496,8 +524,8 @@ func (b *CommitBatcher) AddCommit(ctx context.Context, s SectorInfo, in Aggregat
 	select {
 	case r := <-sent:
 		return r, nil
-	case <-ctx.Done():
-		return sealiface.CommitBatchRes{}, ctx.Err()
+	//case <-ctx.Done():	//yungojs
+	//	return sealiface.CommitBatchRes{}, ctx.Err()
 	}
 }
 
@@ -573,7 +601,10 @@ func (b *CommitBatcher) getCommitCutoff(si SectorInfo) (time.Time, error) {
 		log.Errorf("getting precommit info: %s", err)
 		return time.Now(), err
 	}
-	av, err := actors.VersionForNetwork(nv)
+	if pci == nil {
+		return time.Now(), xerrors.Errorf("precommit info not found")
+	}
+	av, err := actorstypes.VersionForNetwork(nv)
 	if err != nil {
 		log.Errorf("unsupported network vrsion: %s", err)
 		return time.Now(), err

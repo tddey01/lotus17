@@ -12,6 +12,10 @@ import (
 	"strings"
 	"time"
 
+	//yungojs
+	"github.com/filecoin-project/lotus/storage/sealer/ffiwrapper"
+	server_c2 "github.com/filecoin-project/lotus/extern/server-c2"
+
 	"github.com/google/uuid"
 	"github.com/ipfs/go-datastore/namespace"
 	logging "github.com/ipfs/go-log/v2"
@@ -55,6 +59,7 @@ func main() {
 
 	local := []*cli.Command{
 		runCmd,
+		stopCmd,
 		infoCmd,
 		storageCmd,
 		setCmd,
@@ -90,15 +95,16 @@ func main() {
 				Usage:   fmt.Sprintf("Specify miner repo path. flag storagerepo and env LOTUS_STORAGE_PATH are DEPRECATION, will REMOVE SOON"),
 			},
 			&cli.BoolFlag{
-				Name:  "enable-gpu-proving",
-				Usage: "enable use of GPU for mining operations",
-				Value: true,
+				Name:    "enable-gpu-proving",
+				Usage:   "enable use of GPU for mining operations",
+				Value:   true,
+				EnvVars: []string{"LOTUS_WORKER_ENABLE_GPU_PROVING"},
 			},
 		},
 
 		After: func(c *cli.Context) error {
 			if r := recover(); r != nil {
-				// Generate report in LOTUS_PATH and re-raise panic
+				// Generate report in LOTUS_PANIC_REPORT_PATH and re-raise panic
 				build.GeneratePanicReport(c.String("panic-reports"), c.String(FlagWorkerRepo), c.App.Name)
 				panic(r)
 			}
@@ -115,102 +121,160 @@ func main() {
 	}
 }
 
+var stopCmd = &cli.Command{
+	Name:  "stop",
+	Usage: "Stop a running lotus worker",
+	Flags: []cli.Flag{},
+	Action: func(cctx *cli.Context) error {
+		api, closer, err := lcli.GetWorkerAPI(cctx)
+		if err != nil {
+			return err
+		}
+		defer closer()
+
+		ctx := lcli.ReqContext(cctx)
+
+		// Detach any storage associated with this worker
+		err = api.StorageDetachAll(ctx)
+		if err != nil {
+			return err
+		}
+
+		err = api.Shutdown(ctx)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	},
+}
+
 var runCmd = &cli.Command{
 	Name:  "run",
 	Usage: "Start lotus worker",
 	Flags: []cli.Flag{
 		&cli.StringFlag{
-			Name:  "listen",
-			Usage: "host address and port the worker api will listen on",
-			Value: "0.0.0.0:3456",
+			Name:    "listen",
+			Usage:   "host address and port the worker api will listen on",
+			Value:   "0.0.0.0:3456",
+			EnvVars: []string{"LOTUS_WORKER_LISTEN"},
 		},
 		&cli.StringFlag{
 			Name:   "address",
 			Hidden: true,
 		},
 		&cli.BoolFlag{
-			Name:  "no-local-storage",
-			Usage: "don't use storageminer repo for sector storage",
+			Name:    "no-local-storage",
+			Usage:   "don't use storageminer repo for sector storage",
+			EnvVars: []string{"LOTUS_WORKER_NO_LOCAL_STORAGE"},
 		},
 		&cli.BoolFlag{
-			Name:  "no-swap",
-			Usage: "don't use swap",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  "addpiece",
-			Usage: "enable addpiece",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "precommit1",
-			Usage: "enable precommit1 (32G sectors: 1 core, 128GiB Memory)",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "unseal",
-			Usage: "enable unsealing (32G sectors: 1 core, 128GiB Memory)",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "precommit2",
-			Usage: "enable precommit2 (32G sectors: all cores, 96GiB Memory)",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "commit",
-			Usage: "enable commit (32G sectors: all cores or GPUs, 128GiB Memory + 64GiB swap)",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "replica-update",
-			Usage: "enable replica update",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "prove-replica-update2",
-			Usage: "enable prove replica update 2",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "regen-sector-key",
-			Usage: "enable regen sector key",
-			Value: true,
-		},
-		&cli.BoolFlag{
-			Name:  "windowpost",
-			Usage: "enable window post",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  "winningpost",
-			Usage: "enable winning post",
-			Value: false,
-		},
-		&cli.BoolFlag{
-			Name:  "no-default",
-			Usage: "disable all default compute tasks, use the worker for storage/fetching only",
-			Value: false,
-		},
-		&cli.IntFlag{
-			Name:  "parallel-fetch-limit",
-			Usage: "maximum fetch operations to run in parallel",
-			Value: 5,
-		},
-		&cli.IntFlag{
-			Name:  "post-parallel-reads",
-			Usage: "maximum number of parallel challenge reads (0 = no limit)",
-			Value: 128,
-		},
-		&cli.DurationFlag{
-			Name:  "post-read-timeout",
-			Usage: "time limit for reading PoSt challenges (0 = no limit)",
-			Value: 0,
+			Name:    "no-swap",
+			Usage:   "don't use swap",
+			Value:   false,
+			EnvVars: []string{"LOTUS_WORKER_NO_SWAP"},
 		},
 		&cli.StringFlag{
-			Name:  "timeout",
-			Usage: "used when 'listen' is unspecified. must be a valid duration recognized by golang's time.ParseDuration function",
-			Value: "30m",
+			Name:        "name",
+			Usage:       "custom worker name",
+			EnvVars:     []string{"LOTUS_WORKER_NAME"},
+			DefaultText: "hostname",
+		},
+		&cli.BoolFlag{
+			Name:    "addpiece",
+			Usage:   "enable addpiece",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_ADDPIECE"},
+		},
+		&cli.BoolFlag{
+			Name:    "precommit1",
+			Usage:   "enable precommit1 (32G sectors: 1 core, 128GiB Memory)",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_PRECOMMIT1"},
+		},
+		&cli.BoolFlag{
+			Name:    "unseal",
+			Usage:   "enable unsealing (32G sectors: 1 core, 128GiB Memory)",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_UNSEAL"},
+		},
+		&cli.BoolFlag{
+			Name:    "precommit2",
+			Usage:   "enable precommit2 (32G sectors: all cores, 96GiB Memory)",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_PRECOMMIT2"},
+		},
+		&cli.BoolFlag{
+			Name:    "commit",
+			Usage:   "enable commit (32G sectors: all cores or GPUs, 128GiB Memory + 64GiB swap)",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_COMMIT"},
+		},
+		&cli.BoolFlag{
+			Name:    "replica-update",
+			Usage:   "enable replica update",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_REPLICA_UPDATE"},
+		},
+		&cli.BoolFlag{
+			Name:    "prove-replica-update2",
+			Usage:   "enable prove replica update 2",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_PROVE_REPLICA_UPDATE2"},
+		},
+		&cli.BoolFlag{
+			Name:    "regen-sector-key",
+			Usage:   "enable regen sector key",
+			Value:   true,
+			EnvVars: []string{"LOTUS_WORKER_REGEN_SECTOR_KEY"},
+		},
+		&cli.BoolFlag{
+			Name:    "sector-download",
+			Usage:   "enable external sector data download",
+			Value:   false,
+			EnvVars: []string{"LOTUS_WORKER_SECTOR_DOWNLOAD"},
+		},
+		&cli.BoolFlag{
+			Name:    "windowpost",
+			Usage:   "enable window post",
+			Value:   false,
+			EnvVars: []string{"LOTUS_WORKER_WINDOWPOST"},
+		},
+		&cli.BoolFlag{
+			Name:    "winningpost",
+			Usage:   "enable winning post",
+			Value:   false,
+			EnvVars: []string{"LOTUS_WORKER_WINNINGPOST"},
+		},
+		&cli.BoolFlag{
+			Name:    "no-default",
+			Usage:   "disable all default compute tasks, use the worker for storage/fetching only",
+			Value:   false,
+			EnvVars: []string{"LOTUS_WORKER_NO_DEFAULT"},
+		},
+		&cli.IntFlag{
+			Name:    "parallel-fetch-limit",
+			Usage:   "maximum fetch operations to run in parallel",
+			Value:   5,
+			EnvVars: []string{"LOTUS_WORKER_PARALLEL_FETCH_LIMIT"},
+		},
+		&cli.IntFlag{
+			Name:    "post-parallel-reads",
+			Usage:   "maximum number of parallel challenge reads (0 = no limit)",
+			Value:   128,
+			EnvVars: []string{"LOTUS_WORKER_POST_PARALLEL_READS"},
+		},
+		&cli.DurationFlag{
+			Name:    "post-read-timeout",
+			Usage:   "time limit for reading PoSt challenges (0 = no limit)",
+			Value:   0,
+			EnvVars: []string{"LOTUS_WORKER_POST_READ_TIMEOUT"},
+		},
+		&cli.StringFlag{
+			Name:    "timeout",
+			Usage:   "used when 'listen' is unspecified. must be a valid duration recognized by golang's time.ParseDuration function",
+			Value:   "30m",
+			EnvVars: []string{"LOTUS_WORKER_TIMEOUT"},
 		},
 	},
 	Before: func(cctx *cli.Context) error {
@@ -225,6 +289,21 @@ var runCmd = &cli.Command{
 	},
 	Action: func(cctx *cli.Context) error {
 		log.Info("Starting lotus worker")
+		//yungojs
+		if os.Getenv("C2_MANAGE")=="true"{
+			ips := strings.Split(os.Getenv("C2_URL"),",")
+			for _,v := range ips{
+				ffiwrapper.URLC2 = append(ffiwrapper.URLC2, &server_c2.C2Server{v,0})
+			}
+			fmt.Println("ffiwrapper.C2_URL:",ffiwrapper.URLC2)
+			if len(ffiwrapper.URLC2) == 0 {
+				log.Fatal("启动失败：C2_URL为空:",ips)
+			}
+			if os.Getenv("C2_TOKEN")==""{
+				log.Fatal("启动失败：C2_TOKEN为空")
+			}
+			go ffiwrapper.TrySched()
+		}
 
 		if !cctx.Bool("enable-gpu-proving") {
 			if err := os.Setenv("BELLMAN_NO_GPU", "true"); err != nil {
@@ -318,6 +397,9 @@ var runCmd = &cli.Command{
 
 		if (workerType == sealtasks.WorkerSealing || cctx.IsSet("addpiece")) && cctx.Bool("addpiece") {
 			taskTypes = append(taskTypes, sealtasks.TTAddPiece, sealtasks.TTDataCid)
+		}
+		if (workerType == sealtasks.WorkerSealing || cctx.IsSet("sector-download")) && cctx.Bool("sector-download") {
+			taskTypes = append(taskTypes, sealtasks.TTDownloadSector)
 		}
 		if (workerType == sealtasks.WorkerSealing || cctx.IsSet("precommit1")) && cctx.Bool("precommit1") {
 			taskTypes = append(taskTypes, sealtasks.TTPreCommit1)
@@ -448,13 +530,22 @@ var runCmd = &cli.Command{
 				if err != nil {
 					return err
 				}
-				rip, err := extractRoutableIP(timeout)
+				rip, err := extractRoutableIP(timeout,addressSlice[1])		//yungojs
 				if err != nil {
 					return err
 				}
 				address = rip + ":" + addressSlice[1]
 			}
+			//yungojs
+			sealer.WorkerIp = address
+			log.Info("工人IP", sealer.WorkerIp)
 		}
+		//yungojs
+		dsy, err := lr.Datastore(context.Background(), "/metadata-yungo")
+		if err != nil {
+			return nil
+		}
+		widp := statestore.New(namespace.Wrap(dsy, modules.WidPrefix))
 
 		localStore, err := paths.NewLocal(ctx, lr, nodeApi, []string{"http://" + address + "/remote"})
 		if err != nil {
@@ -491,7 +582,8 @@ var runCmd = &cli.Command{
 				NoSwap:                    cctx.Bool("no-swap"),
 				MaxParallelChallengeReads: cctx.Int("post-parallel-reads"),
 				ChallengeReadTimeout:      cctx.Duration("post-read-timeout"),
-			}, remote, localStore, nodeApi, nodeApi, wsts),
+				Name:                      cctx.String("name"),
+			}, remote, localStore, nodeApi, nodeApi, wsts,widp,nodeApi),	//yungojs 2个参数
 			LocalStore: localStore,
 			Storage:    lr,
 		}
@@ -505,15 +597,15 @@ var runCmd = &cli.Command{
 				return ctx
 			},
 		}
-
-		go func() {
-			<-ctx.Done()
-			log.Warn("Shutting down...")
-			if err := srv.Shutdown(context.TODO()); err != nil {
-				log.Errorf("shutting down RPC server failed: %s", err)
-			}
-			log.Warn("Graceful shutdown successful")
-		}()
+		//yungojs
+		//go func() {
+		//	<-ctx.Done()
+		//	log.Warn("Shutting down...")
+		//	if err := srv.Shutdown(context.TODO()); err != nil {
+		//		log.Errorf("shutting down RPC server failed: %s", err)
+		//	}
+		//	log.Warn("Graceful shutdown successful")
+		//}()
 
 		nl, err := net.Listen("tcp", address)
 		if err != nil {
@@ -571,7 +663,7 @@ var runCmd = &cli.Command{
 				if redeclareStorage {
 					log.Info("Redeclaring local storage")
 
-					if err := localStore.Redeclare(ctx); err != nil {
+					if err := localStore.Redeclare(ctx, nil, false); err != nil {
 						log.Errorf("Redeclaring local storage failed: %+v", err)
 
 						select {
@@ -602,18 +694,25 @@ var runCmd = &cli.Command{
 
 					select {
 					case <-readyCh:
+						//yungojs
 						if err := nodeApi.WorkerConnect(ctx, "http://"+address+"/rpc/v0"); err != nil {
 							log.Errorf("Registering worker failed: %+v", err)
-							cancel()
-							return
+							//cancel()
+							//return
 						}
 
 						log.Info("Worker registered successfully, waiting for tasks")
 
 						readyCh = nil
 					case <-heartbeats.C:
-					case <-ctx.Done():
-						return // graceful shutdown
+						//yungojs
+						if err != nil {
+							if err1 := nodeApi.WorkerConnect(context.Background(), "http://"+address+"/rpc/v0"); err1 != nil {
+								log.Errorf("Registering worker failed: %+v", err1)
+							}
+						}
+					//case <-ctx.Done():
+					//	return // graceful shutdown
 					}
 				}
 
@@ -623,11 +722,22 @@ var runCmd = &cli.Command{
 			}
 		}()
 
+		go func() {
+			<-workerApi.Done()
+			// Wait 20s to allow the miner to unregister the worker on next heartbeat
+			time.Sleep(20 * time.Second)
+			log.Warn("Shutting down...")
+			if err := srv.Shutdown(context.TODO()); err != nil {
+				log.Errorf("shutting down RPC server failed: %s", err)
+			}
+			log.Warn("Graceful shutdown successful")
+		}()
+
 		return srv.Serve(nl)
 	},
 }
-
-func extractRoutableIP(timeout time.Duration) (string, error) {
+//yungojs
+func extractRoutableIP(timeout time.Duration,port string) (string, error) {
 	minerMultiAddrKey := "MINER_API_INFO"
 	deprecatedMinerMultiAddrKey := "STORAGE_API_INFO"
 	env, ok := os.LookupEnv(minerMultiAddrKey)
@@ -648,5 +758,7 @@ func extractRoutableIP(timeout time.Duration) (string, error) {
 
 	localAddr := conn.LocalAddr().(*net.TCPAddr)
 
+	//yungojs
+	sealer.WorkerIp = strings.Split(localAddr.IP.String(), ":")[0] + ":" + port
 	return strings.Split(localAddr.IP.String(), ":")[0], nil
 }

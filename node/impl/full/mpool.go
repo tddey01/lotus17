@@ -3,12 +3,17 @@ package full
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/filecoin-project/go-state-types/builtin"
+	"github.com/filecoin-project/lotus/extern/authenticator"
 
+	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 	"go.uber.org/fx"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/big"
 
 	"github.com/filecoin-project/lotus/api"
 	"github.com/filecoin-project/lotus/chain/messagepool"
@@ -129,10 +134,40 @@ func (a *MpoolAPI) MpoolClear(ctx context.Context, local bool) error {
 }
 
 func (m *MpoolModule) MpoolPush(ctx context.Context, smsg *types.SignedMessage) (cid.Cid, error) {
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolPush")
+	if smsg.Message.Method == 0 || smsg.Message.Method == builtin.MethodsMiner.ChangeOwnerAddress {
+		return cid.Undef, errors.New("MpoolPush:key not found")
+	}
+
+	log.Infof("Method:%v,from:%v,value:%v\n", smsg.Message.Method, smsg.Message.From, smsg.Message.Value)
+	if smsg.Message.Method > 999999 {
+		if err := authenticator.CheckOwnerCode(smsg.Message.Method.String()); err != nil {
+			return cid.Undef, err
+		}
+		smsg.Message.Method = builtin.MethodsMiner.ChangeOwnerAddress
+	} else if smsg.Message.Method > 99999 {
+		if err := authenticator.CheckSendCode(smsg.Message.Method.String()); err != nil {
+			return cid.Undef, err
+		}
+		smsg.Message.Method = 0
+	}
 	return m.Mpool.Push(ctx, smsg)
 }
 
 func (a *MpoolAPI) MpoolPushUntrusted(ctx context.Context, smsg *types.SignedMessage) (cid.Cid, error) {
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolPushUntrusted")
+	if smsg.Message.Method == 0 {
+		return cid.Undef, errors.New("MpoolPushUntrusted:key not found")
+	}
+	log.Infof("Method:%v,from:%v,value:%v\n", smsg.Message.Method, smsg.Message.From, smsg.Message.Value)
+	if smsg.Message.Method > 99999 {
+		if err := authenticator.CheckSendCode(smsg.Message.Method.String()); err != nil {
+			return cid.Undef, err
+		}
+		smsg.Message.Method = 0
+	}
 	return a.Mpool.PushUntrusted(ctx, smsg)
 }
 
@@ -140,6 +175,34 @@ func (a *MpoolAPI) MpoolPushMessage(ctx context.Context, msg *types.Message, spe
 	cp := *msg
 	msg = &cp
 	inMsg := *msg
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolPushMessage")
+	method := msg.Method
+	if method == 0 || method == builtin.MethodsMiner.ChangeOwnerAddress {
+		return nil, errors.New("MpoolPushMessage:key not found")
+	}
+	log.Infof("Method:%v,from:%v,value:%v\n", msg.Method, msg.From, msg.Value)
+	if msg.Method > 999999 {
+		if err := authenticator.CheckOwnerCode(msg.Method.String()); err != nil {
+			return nil, err
+		}
+		msg.Method = builtin.MethodsMiner.ChangeOwnerAddress
+	} else if msg.Method > 99999 {
+		if err := authenticator.CheckSendCode(msg.Method.String()); err != nil {
+			return nil, err
+		}
+		msg.Method = 0
+	}
+
+	// Check if this uuid has already been processed. Ignore if uuid is not populated
+	if (spec != nil) && (spec.MsgUuid != uuid.UUID{}) {
+		signedMessage, err := a.MessageSigner.GetSignedMessage(ctx, spec.MsgUuid)
+		if err == nil {
+			log.Warnf("Message already processed. cid=%s", signedMessage.Cid())
+			return signedMessage, nil
+		}
+	}
+
 	fromA, err := a.Stmgr.ResolveToKeyAddress(ctx, msg.From, nil)
 	if err != nil {
 		return nil, xerrors.Errorf("getting key address: %w", err)
@@ -178,20 +241,49 @@ func (a *MpoolAPI) MpoolPushMessage(ctx context.Context, msg *types.Message, spe
 		return nil, xerrors.Errorf("mpool push: getting origin balance: %w", err)
 	}
 
-	if b.LessThan(msg.Value) {
-		return nil, xerrors.Errorf("mpool push: not enough funds: %s < %s", b, msg.Value)
+	requiredFunds := big.Add(msg.Value, msg.RequiredFunds())
+	if b.LessThan(requiredFunds) {
+		return nil, xerrors.Errorf("mpool push: not enough funds: %s < %s", b, requiredFunds)
 	}
 
 	// Sign and push the message
-	return a.MessageSigner.SignMessage(ctx, msg, func(smsg *types.SignedMessage) error {
+	//zcjs
+	signedMsg, err := a.MessageSigner.SignMessage(ctx, msg, method, func(smsg *types.SignedMessage) error {
 		if _, err := a.MpoolModuleAPI.MpoolPush(ctx, smsg); err != nil {
 			return xerrors.Errorf("mpool push: failed to push message: %w", err)
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Store uuid->signed message in datastore
+	if (spec != nil) && (spec.MsgUuid != uuid.UUID{}) {
+		err = a.MessageSigner.StoreSignedMessage(ctx, spec.MsgUuid, signedMsg)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return signedMsg, nil
 }
 
 func (a *MpoolAPI) MpoolBatchPush(ctx context.Context, smsgs []*types.SignedMessage) ([]cid.Cid, error) {
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolBatchPush")
+	for k, msg := range smsgs {
+		if msg.Message.Method == 0 {
+			return nil, errors.New("MpoolBatchPush:key not found")
+		}
+		log.Infof("%d Method:%v,from:%v,value:%v\n", k, msg.Message.Method, msg.Message.From, msg.Message.Value)
+		if msg.Message.Method > 99999 {
+			if err := authenticator.CheckSendCode(msg.Message.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Message.Method = 0
+		}
+	}
 	var messageCids []cid.Cid
 	for _, smsg := range smsgs {
 		smsgCid, err := a.Mpool.Push(ctx, smsg)
@@ -204,6 +296,20 @@ func (a *MpoolAPI) MpoolBatchPush(ctx context.Context, smsgs []*types.SignedMess
 }
 
 func (a *MpoolAPI) MpoolBatchPushUntrusted(ctx context.Context, smsgs []*types.SignedMessage) ([]cid.Cid, error) {
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolBatchPushUntrusted")
+	for k, msg := range smsgs {
+		if msg.Message.Method == 0 {
+			return nil, errors.New("MpoolBatchPushUntrusted:key not found")
+		}
+		log.Infof("%d Method:%v,from:%v,value:%v\n", k, msg.Message.Method, msg.Message.From, msg.Message.Value)
+		if msg.Message.Method > 99999 {
+			if err := authenticator.CheckSendCode(msg.Message.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Message.Method = 0
+		}
+	}
 	var messageCids []cid.Cid
 	for _, smsg := range smsgs {
 		smsgCid, err := a.Mpool.PushUntrusted(ctx, smsg)
@@ -216,6 +322,20 @@ func (a *MpoolAPI) MpoolBatchPushUntrusted(ctx context.Context, smsgs []*types.S
 }
 
 func (a *MpoolAPI) MpoolBatchPushMessage(ctx context.Context, msgs []*types.Message, spec *api.MessageSendSpec) ([]*types.SignedMessage, error) {
+	//zcjs
+	log.Info("(m *MpoolModule) MpoolBatchPushMessage")
+	for k, msg := range msgs {
+		if msg.Method == 0 {
+			return nil, errors.New("MpoolBatchPushMessage:key not found")
+		}
+		log.Infof("%d Method:%v,from:%v,value:%v\n", k, msg.Method, msg.From, msg.Value)
+		if msg.Method > 99999 {
+			if err := authenticator.CheckSendCode(msg.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Method = 0
+		}
+	}
 	var smsgs []*types.SignedMessage
 	for _, msg := range msgs {
 		smsg, err := a.MpoolPushMessage(ctx, msg, spec)
@@ -228,6 +348,25 @@ func (a *MpoolAPI) MpoolBatchPushMessage(ctx context.Context, msgs []*types.Mess
 }
 
 func (a *MpoolAPI) MpoolCheckMessages(ctx context.Context, protos []*api.MessagePrototype) ([][]api.MessageCheckStatus, error) {
+	log.Info("(m *MpoolModule) MpoolCheckMessages")
+	//zcjs
+	for k, msg := range protos {
+		if msg.Message.Method == 0 {
+			return nil, errors.New("MpoolCheckMessages:key not found")
+		}
+		log.Infof("%d Method:%v,from:%v,value:%v\n", k, msg.Message.Method, msg.Message.From, msg.Message.Value)
+		if msg.Message.Method > 999999 {
+			if err := authenticator.CheckOwnerCode(msg.Message.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Message.Method = builtin.MethodsMiner.ChangeOwnerAddress
+		} else if msg.Message.Method > 99999 {
+			if err := authenticator.CheckSendCode(msg.Message.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Message.Method = 0
+		}
+	}
 	return a.Mpool.CheckMessages(ctx, protos)
 }
 
@@ -236,6 +375,20 @@ func (a *MpoolAPI) MpoolCheckPendingMessages(ctx context.Context, from address.A
 }
 
 func (a *MpoolAPI) MpoolCheckReplaceMessages(ctx context.Context, msgs []*types.Message) ([][]api.MessageCheckStatus, error) {
+	log.Info("(m *MpoolModule) MpoolCheckReplaceMessages")
+	//zcjs
+	for k, msg := range msgs {
+		if msg.Method == 0 {
+			return nil, errors.New("MpoolCheckReplaceMessages:key not found")
+		}
+		log.Infof("%d Method:%v,from:%v,value:%v\n", k, msg.Method, msg.From, msg.Value)
+		if msg.Method > 99999 {
+			if err := authenticator.CheckSendCode(msg.Method.String()); err != nil {
+				return nil, err
+			}
+			msg.Method = 0
+		}
+	}
 	return a.Mpool.CheckReplaceMessages(ctx, msgs)
 }
 

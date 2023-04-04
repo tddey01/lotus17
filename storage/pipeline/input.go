@@ -23,6 +23,7 @@ import (
 	"github.com/filecoin-project/lotus/storage/sealer"
 	"github.com/filecoin-project/lotus/storage/sealer/ffiwrapper"
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
+	"github.com/filecoin-project/lotus/storage/sectorblocks"
 )
 
 func (m *Sealing) handleWaitDeals(ctx statemachine.Context, sector SectorInfo) error {
@@ -233,7 +234,7 @@ func (m *Sealing) handleAddPiece(ctx statemachine.Context, sector SectorInfo) er
 			}
 
 			pieceSizes = append(pieceSizes, p.Unpadded())
-			res.NewPieces = append(res.NewPieces, Piece{
+			res.NewPieces = append(res.NewPieces, api.SectorPiece{
 				Piece: ppi,
 			})
 		}
@@ -261,7 +262,7 @@ func (m *Sealing) handleAddPiece(ctx statemachine.Context, sector SectorInfo) er
 		offset += deal.size
 		pieceSizes = append(pieceSizes, deal.size)
 
-		res.NewPieces = append(res.NewPieces, Piece{
+		res.NewPieces = append(res.NewPieces, api.SectorPiece{
 			Piece:    ppi,
 			DealInfo: &deal.deal,
 		})
@@ -284,7 +285,7 @@ func (m *Sealing) SectorAddPieceToAny(ctx context.Context, size abi.UnpaddedPiec
 	if err != nil {
 		return api.SectorOffset{}, xerrors.Errorf("getting current seal proof type: %w", err)
 	}
-
+	log.Infof("中创2.4.1.1 %d (publish msg: %s)", deal.DealID, deal.PublishCid)
 	ssize, err := sp.SectorSize()
 	if err != nil {
 		return api.SectorOffset{}, err
@@ -312,16 +313,18 @@ func (m *Sealing) SectorAddPieceToAny(ctx context.Context, size abi.UnpaddedPiec
 			"cannot add piece for deal with piece CID %s: current epoch %d has passed deal proposal start epoch %d",
 			deal.DealProposal.PieceCID, ts.Height(), deal.DealProposal.StartEpoch)
 	}
+	log.Infof("中创2.4.1.2 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 
 	m.inputLk.Lock()
 	if pp, exist := m.pendingPieces[proposalCID(deal)]; exist {
 		m.inputLk.Unlock()
-
+		log.Infof("中创2.4.1.3 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 		// we already have a pre-existing add piece call for this deal, let's wait for it to finish and see if it's successful
 		res, err := waitAddPieceResp(ctx, pp)
 		if err != nil {
 			return api.SectorOffset{}, err
 		}
+		log.Infof("中创2.4.1.4 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 		if res.err == nil {
 			// all good, return the response
 			return api.SectorOffset{Sector: res.sn, Offset: res.offset.Padded()}, res.err
@@ -329,14 +332,15 @@ func (m *Sealing) SectorAddPieceToAny(ctx context.Context, size abi.UnpaddedPiec
 		// if there was an error waiting for a pre-existing add piece call, let's retry
 		m.inputLk.Lock()
 	}
-
+	log.Infof("中创2.4.1.5 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 	// addPendingPiece takes over m.inputLk
 	pp := m.addPendingPiece(ctx, size, data, deal, sp)
-
+	log.Infof("中创2.4.1.6 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 	res, err := waitAddPieceResp(ctx, pp)
 	if err != nil {
 		return api.SectorOffset{}, err
 	}
+	log.Infof("中创2.4.1.7 %d (publish msg: %s)", deal.DealID, deal.PublishCid, ts.Height())
 	return api.SectorOffset{Sector: res.sn, Offset: res.offset.Padded()}, res.err
 }
 
@@ -376,7 +380,7 @@ func waitAddPieceResp(ctx context.Context, pp *pendingPiece) (*pieceAcceptResp, 
 	}
 }
 
-func (m *Sealing) MatchPendingPiecesToOpenSectors(ctx context.Context) error {
+func (m *Sealing) SectorMatchPendingPiecesToOpenSectors(ctx context.Context) error {
 	sp, err := m.currentSealProof(ctx)
 	if err != nil {
 		return xerrors.Errorf("failed to get current seal proof: %w", err)
@@ -395,7 +399,7 @@ func (m *Sealing) updateInput(ctx context.Context, sp abi.RegisteredSealProof) e
 		e abi.ChainEpoch
 		p abi.TokenAmount
 	})
-	expF := func(sn abi.SectorNumber) (abi.ChainEpoch, abi.TokenAmount, error) {
+	getExpirationCached := func(sn abi.SectorNumber) (abi.ChainEpoch, abi.TokenAmount, error) {
 		if e, ok := memo[sn]; ok {
 			return e.e, e.p, nil
 		}
@@ -428,24 +432,27 @@ func (m *Sealing) updateInput(ctx context.Context, sp abi.RegisteredSealProof) e
 
 	// todo: this is distinctly O(n^2), may need to be optimized for tiny deals and large scale miners
 	//  (unlikely to be a problem now)
+	log.Info("中创2.4.1.6.1 updateInput", len(m.pendingPieces), len(m.openSectors))
 	for proposalCid, piece := range m.pendingPieces {
 		if piece.assigned {
 			continue // already assigned to a sector, skip
 		}
-
+		log.Info(proposalCid, "中创2.4.1.6.2 updateInput", piece.deal.DealID, piece.deal.PublishCid)
 		toAssign[proposalCid] = struct{}{}
 
 		for id, sector := range m.openSectors {
 			avail := abi.PaddedPieceSize(ssize).Unpadded() - sector.used
 			// check that sector lifetime is long enough to fit deal using latest expiration from on chain
-
-			ok, err := sector.dealFitsInLifetime(piece.deal.DealProposal.EndEpoch, expF)
+			log.Info(proposalCid, "中创2.4.1.6.3 updateInput", piece.deal.DealID, ",", piece.deal.PublishCid, ",", piece.deal.DealProposal.EndEpoch, ",", piece.deal.DealProposal.EndEpoch)
+			ok, err := sector.dealFitsInLifetime(piece.deal.DealProposal.EndEpoch, getExpirationCached)
+			log.Info(proposalCid, "中创2.4.1.6.4 updateInput", piece.deal.DealID, ",", err, ",", ok)
 			if err != nil {
 				log.Errorf("failed to check expiration for cc Update sector %d", sector.number)
 				continue
 			}
 			if !ok {
-				exp, _, _ := expF(sector.number)
+				exp, _, _ := getExpirationCached(sector.number)
+				log.Info(proposalCid, "中创2.4.1.6.5 updateInput", piece.size, ",", avail)
 				log.Debugf("CC update sector %d cannot fit deal, expiration %d before deal end epoch %d", id, exp, piece.deal.DealProposal.EndEpoch)
 				continue
 			}
@@ -473,7 +480,7 @@ func (m *Sealing) updateInput(ctx context.Context, sp abi.RegisteredSealProof) e
 		return matches[i].sector.Number < matches[j].sector.Number // prefer older sectors
 	})
 
-	log.Debugw("updateInput matching", "matches", len(matches), "toAssign", len(toAssign), "openSectors", len(m.openSectors), "pieces", len(m.pendingPieces))
+	log.Info("中创2.4.1.6.6 updateInput matching", "matches", len(matches), "toAssign", len(toAssign), "openSectors", len(m.openSectors), "pieces", len(m.pendingPieces))
 
 	var assigned int
 	for _, mt := range matches {
@@ -508,19 +515,19 @@ func (m *Sealing) updateInput(ctx context.Context, sp abi.RegisteredSealProof) e
 		}
 	}
 
-	log.Debugw("updateInput matching done", "matches", len(matches), "toAssign", len(toAssign), "assigned", assigned, "openSectors", len(m.openSectors), "pieces", len(m.pendingPieces))
+	log.Infow("中创2.4.1.6.7 updateInput matching done", "matches", len(matches), "toAssign", len(toAssign), "assigned", assigned, "openSectors", len(m.openSectors), "pieces", len(m.pendingPieces))
 
 	if len(toAssign) > 0 {
 		log.Errorf("we are trying to create a new sector with open sectors %v", m.openSectors)
-		if err := m.tryGetDealSector(ctx, sp, expF); err != nil {
+		if err := m.tryGetDealSector(ctx, sp, getExpirationCached); err != nil {
 			log.Errorw("Failed to create a new sector for deals", "error", err)
 		}
 	}
-
+	log.Infow("中创2.4.1.6.8", toAssign)
 	return nil
 }
 
-func (m *Sealing) calcTargetExpiration(ctx context.Context, ssize abi.SectorSize) (minTarget, target abi.ChainEpoch, err error) {
+func (m *Sealing) calcTargetExpiration(ctx context.Context, ssize abi.SectorSize, cfg sealiface.Config) (minExpEpoch, targetEpoch abi.ChainEpoch, err error) {
 	var candidates []*pendingPiece
 
 	for _, piece := range m.pendingPieces {
@@ -536,11 +543,16 @@ func (m *Sealing) calcTargetExpiration(ctx context.Context, ssize abi.SectorSize
 	})
 
 	var totalBytes uint64
+	var full bool
+
+	// Find the expiration of the last deal which can fit into the sector, use that as the initial target
 	for _, candidate := range candidates {
 		totalBytes += uint64(candidate.size)
+		targetEpoch = candidate.deal.DealProposal.EndEpoch
 
 		if totalBytes >= uint64(abi.PaddedPieceSize(ssize).Unpadded()) {
-			return candidates[0].deal.DealProposal.EndEpoch, candidate.deal.DealProposal.EndEpoch, nil
+			full = true
+			break
 		}
 	}
 
@@ -549,12 +561,31 @@ func (m *Sealing) calcTargetExpiration(ctx context.Context, ssize abi.SectorSize
 		return 0, 0, xerrors.Errorf("getting current epoch: %w", err)
 	}
 
-	minDur, maxDur := policy.DealDurationBounds(0)
+	// if the sector isn't full, use max deal duration as the target
+	if !full {
+		minDur, maxDur := policy.DealDurationBounds(0)
 
-	return ts.Height() + minDur, ts.Height() + maxDur, nil
+		minExpEpoch = ts.Height() + minDur
+		targetEpoch = ts.Height() + maxDur
+	}
+
+	// make sure that at least one deal in the queue is within the expiration
+	if len(candidates) > 0 && candidates[0].deal.DealProposal.EndEpoch > minExpEpoch {
+		minExpEpoch = candidates[0].deal.DealProposal.EndEpoch
+	}
+
+	// apply user minimums
+	if abi.ChainEpoch(cfg.MinUpgradeSectorExpiration)+ts.Height() > minExpEpoch {
+		minExpEpoch = abi.ChainEpoch(cfg.MinUpgradeSectorExpiration) + ts.Height()
+	}
+	if abi.ChainEpoch(cfg.MinTargetUpgradeSectorExpiration)+ts.Height() > targetEpoch {
+		targetEpoch = abi.ChainEpoch(cfg.MinTargetUpgradeSectorExpiration) + ts.Height()
+	}
+
+	return minExpEpoch, targetEpoch, nil
 }
 
-func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealProof, ef expFn) (bool, error) {
+func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealProof, cfg sealiface.Config, ef expFn) (bool, error) {
 	if len(m.available) == 0 {
 		return false, nil
 	}
@@ -563,7 +594,7 @@ func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealP
 	if err != nil {
 		return false, xerrors.Errorf("getting sector size: %w", err)
 	}
-	minExpiration, targetExpiration, err := m.calcTargetExpiration(ctx, ssize)
+	minExpirationEpoch, targetExpirationEpoch, err := m.calcTargetExpiration(ctx, ssize, cfg)
 	if err != nil {
 		return false, xerrors.Errorf("calculating min target expiration: %w", err)
 	}
@@ -573,7 +604,7 @@ func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealP
 	bestPledge := types.TotalFilecoinInt
 
 	for s := range m.available {
-		expiration, pledge, err := ef(s.Number)
+		expirationEpoch, pledge, err := ef(s.Number)
 		if err != nil {
 			log.Errorw("checking sector expiration", "error", err)
 			continue
@@ -595,24 +626,24 @@ func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealP
 		// if best is below target, we want larger expirations
 		// if best is above target, we want lower pledge, but only if still above target
 
-		if bestExpiration < targetExpiration {
-			if expiration > bestExpiration && slowChecks(s.Number) {
-				bestExpiration = expiration
+		if bestExpiration < targetExpirationEpoch {
+			if expirationEpoch > bestExpiration && slowChecks(s.Number) {
+				bestExpiration = expirationEpoch
 				bestPledge = pledge
 				candidate = s
 			}
 			continue
 		}
 
-		if expiration >= targetExpiration && pledge.LessThan(bestPledge) && slowChecks(s.Number) {
-			bestExpiration = expiration
+		if expirationEpoch >= targetExpirationEpoch && pledge.LessThan(bestPledge) && slowChecks(s.Number) {
+			bestExpiration = expirationEpoch
 			bestPledge = pledge
 			candidate = s
 		}
 	}
 
-	if bestExpiration < minExpiration {
-		log.Infow("Not upgrading any sectors", "available", len(m.available), "pieces", len(m.pendingPieces), "bestExp", bestExpiration, "target", targetExpiration, "min", minExpiration, "candidate", candidate)
+	if bestExpiration < minExpirationEpoch {
+		log.Infow("Not upgrading any sectors", "available", len(m.available), "pieces", len(m.pendingPieces), "bestExp", bestExpiration, "target", targetExpirationEpoch, "min", minExpirationEpoch, "candidate", candidate)
 		// didn't find a good sector / no sectors were available
 		return false, nil
 	}
@@ -624,8 +655,9 @@ func (m *Sealing) maybeUpgradeSector(ctx context.Context, sp abi.RegisteredSealP
 }
 
 // call with m.inputLk
-func (m *Sealing) createSector(ctx context.Context, cfg sealiface.Config, sp abi.RegisteredSealProof) (abi.SectorNumber, error) {
-	sid, err := m.sc.Next()
+func (m *Sealing) createSector(ctx context.Context, cfg sealiface.Config, sp abi.RegisteredSealProof, cur uint64) (abi.SectorNumber, error) {
+	//yungojs
+	sid, err := m.NextSectorNumber(ctx, cur)
 	if err != nil {
 		return 0, xerrors.Errorf("getting sector number: %w", err)
 	}
@@ -642,6 +674,7 @@ func (m *Sealing) createSector(ctx context.Context, cfg sealiface.Config, sp abi
 }
 
 func (m *Sealing) tryGetDealSector(ctx context.Context, sp abi.RegisteredSealProof, ef expFn) error {
+	log.Info("中创2.4.1.6.7.1", m.nextDealSector != nil)
 	m.startupWait.Wait()
 
 	if m.nextDealSector != nil {
@@ -654,6 +687,7 @@ func (m *Sealing) tryGetDealSector(ctx context.Context, sp abi.RegisteredSealPro
 	}
 
 	// if we're above WaitDeals limit, we don't want to add more staging sectors
+	log.Info("中创2.4.1.6.7.2 ", cfg.MaxWaitDealsSectors, ",", m.stats.curStaging(), ",", cfg.MakeNewSectorForDeals)
 	if cfg.MaxWaitDealsSectors > 0 && m.stats.curStaging() >= cfg.MaxWaitDealsSectors {
 		return nil
 	}
@@ -671,17 +705,18 @@ func (m *Sealing) tryGetDealSector(ctx context.Context, sp abi.RegisteredSealPro
 	// - we don't prefer upgrades, but can't create a new sector
 	shouldUpgrade := canUpgrade && (!cfg.PreferNewSectorsForDeals || !canCreate)
 
-	log.Infow("new deal sector decision",
-		"sealing", m.stats.curSealing(),
-		"maxSeal", cfg.MaxSealingSectorsForDeals,
-		"maxUpgrade", maxUpgrading,
-		"preferNew", cfg.PreferNewSectorsForDeals,
-		"canCreate", canCreate,
-		"canUpgrade", canUpgrade,
-		"shouldUpgrade", shouldUpgrade)
+	log.Info("中创2.4.1.6.7.3 new deal sector decision ",
+		"sealing ", m.stats.curSealing(),
+		"maxSeal ", cfg.MaxSealingSectorsForDeals,
+		"maxUpgrade ", maxUpgrading,
+		"preferNew ", cfg.PreferNewSectorsForDeals,
+		"canCreate ", canCreate,
+		"canUpgrade ", canUpgrade,
+		"shouldUpgrade ", shouldUpgrade)
 
 	if shouldUpgrade {
-		got, err := m.maybeUpgradeSector(ctx, sp, ef)
+		got, err := m.maybeUpgradeSector(ctx, sp, cfg, ef)
+		log.Info("中创2.4.1.6.7.4", got, err)
 		if err != nil {
 			return err
 		}
@@ -691,13 +726,14 @@ func (m *Sealing) tryGetDealSector(ctx context.Context, sp abi.RegisteredSealPro
 	}
 
 	if canCreate {
-		sid, err := m.createSector(ctx, cfg, sp)
+		//yungojs
+		sid, err := m.createSector(ctx, cfg, sp, 0)
 		if err != nil {
 			return err
 		}
 		m.nextDealSector = &sid
 
-		log.Infow("Creating sector", "number", sid, "type", "deal", "proofType", sp)
+		log.Info("中创2.4.1.6.7.5 Creating sector", "number", sid, "type", "deal", "proofType", sp)
 		if err := m.sectors.Send(uint64(sid), SectorStart{
 			ID:         sid,
 			SectorType: sp,
@@ -708,14 +744,14 @@ func (m *Sealing) tryGetDealSector(ctx context.Context, sp abi.RegisteredSealPro
 	return nil
 }
 
-func (m *Sealing) StartPacking(sid abi.SectorNumber) error {
+func (m *Sealing) StartPackingSector(sid abi.SectorNumber) error {
 	m.startupWait.Wait()
 
 	log.Infow("starting to seal deal sector", "sector", sid, "trigger", "user")
 	return m.sectors.Send(uint64(sid), SectorStartPacking{})
 }
 
-func (m *Sealing) AbortUpgrade(sid abi.SectorNumber) error {
+func (m *Sealing) SectorAbortUpgrade(sid abi.SectorNumber) error {
 	m.startupWait.Wait()
 
 	m.inputLk.Lock()
@@ -727,6 +763,78 @@ func (m *Sealing) AbortUpgrade(sid abi.SectorNumber) error {
 	return m.sectors.Send(uint64(sid), SectorAbortUpgrade{xerrors.New("triggered by user")})
 }
 
+func (m *Sealing) SectorsStatus(ctx context.Context, sid abi.SectorNumber, showOnChainInfo bool) (api.SectorInfo, error) {
+	if showOnChainInfo {
+		return api.SectorInfo{}, xerrors.Errorf("on-chain info not supported")
+	}
+
+	info, err := m.GetSectorInfo(sid)
+	if err != nil {
+		return api.SectorInfo{}, err
+	}
+
+	deals := make([]abi.DealID, len(info.Pieces))
+	pieces := make([]api.SectorPiece, len(info.Pieces))
+	for i, piece := range info.Pieces {
+		pieces[i].Piece = piece.Piece
+		if piece.DealInfo == nil {
+			continue
+		}
+
+		pdi := *piece.DealInfo // copy
+		pieces[i].DealInfo = &pdi
+
+		deals[i] = piece.DealInfo.DealID
+	}
+
+	log := make([]api.SectorLog, len(info.Log))
+	for i, l := range info.Log {
+		log[i] = api.SectorLog{
+			Kind:      l.Kind,
+			Timestamp: l.Timestamp,
+			Trace:     l.Trace,
+			Message:   l.Message,
+		}
+	}
+
+	sInfo := api.SectorInfo{
+		SectorID: sid,
+		State:    api.SectorState(info.State),
+		CommD:    info.CommD,
+		CommR:    info.CommR,
+		Proof:    info.Proof,
+		Deals:    deals,
+		Pieces:   pieces,
+		Ticket: api.SealTicket{
+			Value: info.TicketValue,
+			Epoch: info.TicketEpoch,
+		},
+		Seed: api.SealSeed{
+			Value: info.SeedValue,
+			Epoch: info.SeedEpoch,
+		},
+		PreCommitMsg:         info.PreCommitMessage,
+		CommitMsg:            info.CommitMessage,
+		Retries:              info.InvalidProofs,
+		ToUpgrade:            false,
+		ReplicaUpdateMessage: info.ReplicaUpdateMessage,
+
+		LastErr: info.LastErr,
+		Log:     log,
+		// on chain info
+		SealProof:          info.SectorType,
+		Activation:         0,
+		Expiration:         0,
+		DealWeight:         big.Zero(),
+		VerifiedDealWeight: big.Zero(),
+		InitialPledge:      big.Zero(),
+		OnTime:             0,
+		Early:              0,
+	}
+
+	return sInfo, nil
+}
+
 func proposalCID(deal api.PieceDealInfo) cid.Cid {
 	pc, err := deal.DealProposal.Cid()
 	if err != nil {
@@ -736,3 +844,5 @@ func proposalCID(deal api.PieceDealInfo) cid.Cid {
 
 	return pc
 }
+
+var _ sectorblocks.SectorBuilder = &Sealing{}

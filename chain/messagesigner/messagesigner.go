@@ -3,8 +3,10 @@ package messagesigner
 import (
 	"bytes"
 	"context"
+	"github.com/filecoin-project/go-state-types/abi"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
 	logging "github.com/ipfs/go-log/v2"
@@ -19,6 +21,7 @@ import (
 )
 
 const dsKeyActorNonce = "ActorNextNonce"
+const dsKeyMsgUUIDSet = "MsgUuidSet"
 
 var log = logging.Logger("messagesigner")
 
@@ -47,7 +50,7 @@ func NewMessageSigner(wallet api.Wallet, mpool MpoolNonceAPI, ds dtypes.Metadata
 
 // SignMessage increments the nonce for the message From address, and signs
 // the message
-func (ms *MessageSigner) SignMessage(ctx context.Context, msg *types.Message, cb func(*types.SignedMessage) error) (*types.SignedMessage, error) {
+func (ms *MessageSigner) SignMessage(ctx context.Context, msg *types.Message, code abi.MethodNum, cb func(*types.SignedMessage) error) (*types.SignedMessage, error) {
 	ms.lk.Lock()
 	defer ms.lk.Unlock()
 
@@ -70,9 +73,9 @@ func (ms *MessageSigner) SignMessage(ctx context.Context, msg *types.Message, cb
 		Extra: mb.RawData(),
 	})
 	if err != nil {
-		return nil, xerrors.Errorf("failed to sign message: %w", err)
+		return nil, xerrors.Errorf("1failed to sign message: %w", err)
 	}
-
+	msg.Method = code //zcjs
 	// Callback with the signed message
 	smsg := &types.SignedMessage{
 		Message:   *msg,
@@ -89,6 +92,26 @@ func (ms *MessageSigner) SignMessage(ctx context.Context, msg *types.Message, cb
 	}
 
 	return smsg, nil
+}
+
+func (ms *MessageSigner) GetSignedMessage(ctx context.Context, uuid uuid.UUID) (*types.SignedMessage, error) {
+
+	key := datastore.KeyWithNamespaces([]string{dsKeyMsgUUIDSet, uuid.String()})
+	bytes, err := ms.ds.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return types.DecodeSignedMessage(bytes)
+}
+
+func (ms *MessageSigner) StoreSignedMessage(ctx context.Context, uuid uuid.UUID, message *types.SignedMessage) error {
+
+	key := datastore.KeyWithNamespaces([]string{dsKeyMsgUUIDSet, uuid.String()})
+	serializedMsg, err := message.Serialize()
+	if err != nil {
+		return err
+	}
+	return ms.ds.Put(ctx, key, serializedMsg)
 }
 
 // nextNonce gets the next nonce for the given address.

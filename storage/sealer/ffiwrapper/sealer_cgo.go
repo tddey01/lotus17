@@ -11,9 +11,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"io/ioutil"
 	"math/bits"
 	"os"
+	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"github.com/detailyang/go-fallocate"
 	"github.com/ipfs/go-cid"
@@ -28,6 +31,7 @@ import (
 	"github.com/filecoin-project/go-state-types/proof"
 
 	"github.com/filecoin-project/lotus/lib/nullreader"
+	spaths "github.com/filecoin-project/lotus/storage/paths"
 	nr "github.com/filecoin-project/lotus/storage/pipeline/lib/nullreader"
 	"github.com/filecoin-project/lotus/storage/sealer/fr32"
 	"github.com/filecoin-project/lotus/storage/sealer/partialfile"
@@ -53,6 +57,18 @@ func (sb *Sealer) NewSector(ctx context.Context, sector storiface.SectorRef) err
 }
 
 func (sb *Sealer) DataCid(ctx context.Context, pieceSize abi.UnpaddedPieceSize, pieceData storiface.Data) (abi.PieceInfo, error) {
+	origPieceData := pieceData
+	defer func() {
+		closer, ok := origPieceData.(io.Closer)
+		if !ok {
+			log.Warnf("DataCid: cannot close pieceData reader %T because it is not an io.Closer", origPieceData)
+			return
+		}
+		if err := closer.Close(); err != nil {
+			log.Warnw("closing pieceData in DataCid", "error", err)
+		}
+	}()
+
 	pieceData = io.LimitReader(io.MultiReader(
 		pieceData,
 		nullreader.Reader{},
@@ -172,7 +188,53 @@ func (sb *Sealer) DataCid(ctx context.Context, pieceSize abi.UnpaddedPieceSize, 
 	}, nil
 }
 
-func (sb *Sealer) AddPiece(ctx context.Context, sector storiface.SectorRef, existingPieceSizes []abi.UnpaddedPieceSize, pieceSize abi.UnpaddedPieceSize, file storiface.Data) (abi.PieceInfo, error) {
+func (sb *Sealer) AddPiece(ctx context.Context, sector storiface.SectorRef, existingPieceSizes []abi.UnpaddedPieceSize, pieceSize abi.UnpaddedPieceSize, pieceData storiface.Data) (abi.PieceInfo, error) {
+	//yungojs
+	ss, err := sector.ProofType.SectorSize()
+	if err != nil {
+		return abi.PieceInfo{}, err
+	}
+	linkpath := ""
+	switch ss {
+	case ss2KiB:
+		linkpath = os.Getenv("MINER2_S2K_PATH")
+		if linkpath != "" {
+			return sb.AddPiece2(ctx, sector, existingPieceSizes, pieceSize, linkpath)
+		}
+	case ss8MiB:
+		linkpath = os.Getenv("MINER8_S8M_PATH")
+		if linkpath != "" {
+			return sb.AddPiece2(ctx, sector, existingPieceSizes, pieceSize, linkpath)
+		}
+	case ss512MiB:
+		linkpath = os.Getenv("MINER512_S512M_PATH")
+		if linkpath != "" {
+			return sb.AddPiece2(ctx, sector, existingPieceSizes, pieceSize, linkpath)
+		}
+	case ss32GiB:
+		linkpath = os.Getenv("MINER32_S32G_PATH")
+		if linkpath != "" {
+			return sb.AddPiece2(ctx, sector, existingPieceSizes, pieceSize, linkpath)
+		}
+	case ss64GiB:
+		linkpath = os.Getenv("MINER64_S64G_PATH")
+		if linkpath != "" {
+			return sb.AddPiece2(ctx, sector, existingPieceSizes, pieceSize, linkpath)
+		}
+	}
+
+	origPieceData := pieceData
+	defer func() {
+		closer, ok := origPieceData.(io.Closer)
+		if !ok {
+			log.Warnf("AddPiece: cannot close pieceData reader %T because it is not an io.Closer", origPieceData)
+			return
+		}
+		if err := closer.Close(); err != nil {
+			log.Warnw("closing pieceData in AddPiece", "error", err)
+		}
+	}()
+
 	// TODO: allow tuning those:
 	chunk := abi.PaddedPieceSize(4 << 20)
 	parallel := runtime.NumCPU()
@@ -214,8 +276,8 @@ func (sb *Sealer) AddPiece(ctx context.Context, sector storiface.SectorRef, exis
 		if err != nil {
 			return abi.PieceInfo{}, xerrors.Errorf("acquire unsealed sector: %w", err)
 		}
-
 		stagedFile, err = partialfile.CreatePartialFile(maxPieceSize, stagedPath.Unsealed)
+		log.Info("创建文件：", stagedPath.Unsealed, err)
 		if err != nil {
 			return abi.PieceInfo{}, xerrors.Errorf("creating unsealed sector file: %w", err)
 		}
@@ -238,7 +300,7 @@ func (sb *Sealer) AddPiece(ctx context.Context, sector storiface.SectorRef, exis
 
 	pw := fr32.NewPadWriter(w)
 
-	pr := io.TeeReader(io.LimitReader(file, int64(pieceSize)), pw)
+	pr := io.TeeReader(io.LimitReader(pieceData, int64(pieceSize)), pw)
 
 	throttle := make(chan []byte, parallel)
 	piecePromises := make([]func() (abi.PieceInfo, error), 0)
@@ -255,6 +317,7 @@ func (sb *Sealer) AddPiece(ctx context.Context, sector storiface.SectorRef, exis
 		var read int
 		for rbuf := buf; len(rbuf) > 0; {
 			n, err := pr.Read(rbuf)
+			log.Info(sector.ID.Number, "扇区yungo: pr.Read :", n, ":", err)
 			if err != nil && err != io.EOF {
 				return abi.PieceInfo{}, xerrors.Errorf("pr read error: %w", err)
 			}
@@ -865,9 +928,10 @@ func (sb *Sealer) SealCommit1(ctx context.Context, sector storiface.SectorRef, t
 	return output, nil
 }
 
-func (sb *Sealer) SealCommit2(ctx context.Context, sector storiface.SectorRef, phase1Out storiface.Commit1Out) (storiface.Proof, error) {
-	return ffi.SealCommitPhase2(phase1Out, sector.ID.Number, sector.ID.Miner)
-}
+//yungojs
+//func (sb *Sealer) SealCommit2(ctx context.Context, sector storiface.SectorRef, phase1Out storiface.Commit1Out) (storiface.Proof, error) {
+//	return ffi.SealCommitPhase2(phase1Out, sector.ID.Number, sector.ID.Miner)
+//}
 
 func (sb *Sealer) ReplicaUpdate(ctx context.Context, sector storiface.SectorRef, pieces []abi.PieceInfo) (storiface.ReplicaUpdateOut, error) {
 	empty := storiface.ReplicaUpdateOut{}
@@ -1058,6 +1122,44 @@ func (sb *Sealer) FinalizeSector(ctx context.Context, sector storiface.SectorRef
 	return ffi.ClearCache(uint64(ssize), paths.Cache)
 }
 
+// FinalizeSectorInto is like FinalizeSector, but writes finalized sector cache into a new path
+func (sb *Sealer) FinalizeSectorInto(ctx context.Context, sector storiface.SectorRef, dest string) error {
+	ssize, err := sector.ProofType.SectorSize()
+	if err != nil {
+		return err
+	}
+
+	paths, done, err := sb.sectors.AcquireSector(ctx, sector, storiface.FTCache, 0, storiface.PathStorage)
+	if err != nil {
+		return xerrors.Errorf("acquiring sector cache path: %w", err)
+	}
+	defer done()
+
+	files, err := ioutil.ReadDir(paths.Cache)
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		if file.Name() != "t_aux" && file.Name() != "p_aux" {
+			// link all the non-aux files
+			if err := syscall.Link(filepath.Join(paths.Cache, file.Name()), filepath.Join(dest, file.Name())); err != nil {
+				return xerrors.Errorf("link %s: %w", file.Name(), err)
+			}
+			continue
+		}
+
+		d, err := os.ReadFile(filepath.Join(paths.Cache, file.Name()))
+		if err != nil {
+			return xerrors.Errorf("read %s: %w", file.Name(), err)
+		}
+		if err := os.WriteFile(filepath.Join(dest, file.Name()), d, 0666); err != nil {
+			return xerrors.Errorf("write %s: %w", file.Name(), err)
+		}
+	}
+
+	return ffi.ClearCache(uint64(ssize), dest)
+}
+
 func (sb *Sealer) FinalizeReplicaUpdate(ctx context.Context, sector storiface.SectorRef, keepUnsealed []storiface.Range) error {
 	ssize, err := sector.ProofType.SectorSize()
 	if err != nil {
@@ -1115,6 +1217,39 @@ func (sb *Sealer) ReleaseSectorKey(ctx context.Context, sector storiface.SectorR
 
 func (sb *Sealer) Remove(ctx context.Context, sector storiface.SectorRef) error {
 	return xerrors.Errorf("not supported at this layer") // happens in localworker
+}
+
+func (sb *Sealer) DownloadSectorData(ctx context.Context, sector storiface.SectorRef, finalized bool, src map[storiface.SectorFileType]storiface.SectorLocation) error {
+	var todo storiface.SectorFileType
+	for fileType := range src {
+		todo |= fileType
+	}
+
+	ptype := storiface.PathSealing
+	if finalized {
+		ptype = storiface.PathStorage
+	}
+
+	paths, done, err := sb.sectors.AcquireSector(ctx, sector, storiface.FTNone, todo, ptype)
+	if err != nil {
+		return xerrors.Errorf("failed to acquire sector paths: %w", err)
+	}
+	defer done()
+
+	for fileType, data := range src {
+		out := storiface.PathByType(paths, fileType)
+
+		if data.Local {
+			return xerrors.Errorf("sector(%v) with local data (%#v) requested in DownloadSectorData", sector, data)
+		}
+
+		_, err := spaths.FetchWithTemp(ctx, []string{data.URL}, out, data.HttpHeaders())
+		if err != nil {
+			return xerrors.Errorf("downloading sector data: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func GetRequiredPadding(oldLength abi.PaddedPieceSize, newPieceLength abi.PaddedPieceSize) ([]abi.PaddedPieceSize, abi.PaddedPieceSize) {

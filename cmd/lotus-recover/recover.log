@@ -1,0 +1,271 @@
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:32	Starting lotus-recover
+2022-03-25T18:55:14.117+0800	ERROR	lotus-recover	lotus-recover/main.go:193	扇区参数格式不正确：[]
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:231	开始扇区：{32104 600}f3b64d5ee8c83bb91420e84fb39c628fdf0ae22b55d0321311ef1fcf53eeea52
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:231	开始扇区：{32104 601}45d7ecae41b857bd8368134d493dbb460f927829d878b09d47606beca806d70e
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:301	[{32104 601}] Writing piece into sector...
+2022-03-25T18:55:14.117+0800	INFO	ffiwrapper	ffiwrapper/sealer_cgo1.go:195	生成硬链接文件AddPiece1:0,pieceSize:34091302912
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:301	[{32104 600}] Writing piece into sector...
+2022-03-25T18:55:14.117+0800	INFO	ffiwrapper	ffiwrapper/sealer_cgo1.go:195	生成硬链接文件AddPiece1:0,pieceSize:34091302912
+2022-03-25T18:55:14.117+0800	INFO	ffiwrapper	ffiwrapper/sealer_cgo1.go:230	创建硬链接完成!601
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:348	[601] Running replication(1)...E��A�W��hMI=�F�x)�x��G`k��
+2022-03-25T18:55:14.117+0800	INFO	ffiwrapper	ffiwrapper/sealer_cgo1.go:230	创建硬链接完成!600
+2022-03-25T18:55:14.117+0800	INFO	lotus-recover	lotus-recover/main.go:348	[600] Running replication(1)...�M^��;� �O��b��
+�+U�2��S��R
+2022-03-25T18:55:14.117 INFO filcrypto::proofs::api > seal_pre_commit_phase1: start
+2022-03-25T18:55:14.117 INFO filcrypto::proofs::api > seal_pre_commit_phase1: start
+2022-03-25T18:55:14.118 INFO filecoin_proofs::api::seal > seal_pre_commit_phase1:start: SectorId(600)
+2022-03-25T18:55:14.118 INFO filecoin_proofs::api::seal > seal_pre_commit_phase1:start: SectorId(601)
+2022-03-25T18:55:14.118 INFO filecoin_proofs::api::seal > 创建硬链接:/mnt/md0/ipfs/bin/s-64-new,"/mnt/md0/lotus-recover/recover150007549/cache/s-t032104-601/sc-02-data-tree-d.dat"
+2022-03-25T18:55:14.118 INFO filecoin_proofs::api::seal > 创建硬链接:/mnt/md0/ipfs/bin/s-64-new,"/mnt/md0/lotus-recover/recover150007549/cache/s-t032104-600/sc-02-data-tree-d.dat"
+2022-03-25T18:55:14.118 INFO storage_proofs_porep::stacked::vanilla::proof > replicate_phase1
+2022-03-25T18:55:14.118 INFO storage_proofs_porep::stacked::vanilla::proof > replicate_phase1
+2022-03-25T18:55:14.118 INFO storage_proofs_porep::stacked::vanilla::graph > using parent_cache[2048 / 1073741824]
+2022-03-25T18:55:14.118 INFO storage_proofs_porep::stacked::vanilla::graph > using parent_cache[2048 / 1073741824]
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::cache > parent cache: opening /mnt/md0/filecoin-parents/v28-sdr-parent-21981246c370f9d76c7a77ab273d94bde0ceb4e938292334960bce05585dc117.cache, verify enabled: false
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::proof > multi core replication
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > create labels
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::cache > parent cache: opening /mnt/md0/filecoin-parents/v28-sdr-parent-21981246c370f9d76c7a77ab273d94bde0ceb4e938292334960bce05585dc117.cache, verify enabled: false
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::proof > multi core replication
+2022-03-25T18:55:14.119 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > create labels
+2022-03-25T18:55:14.201 INFO storage_proofs_porep::stacked::vanilla::memory_handling > initializing cache
+2022-03-25T18:55:14.201 INFO storage_proofs_porep::stacked::vanilla::memory_handling > initializing cache
+2022-03-25T18:55:37.895 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 1
+2022-03-25T18:55:59.357 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 1
+2022-03-25T18:55:59.357 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 1
+2022-03-25T18:55:59.358 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 1
+2022-03-25T18:55:59.358 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T18:55:59.358 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:12:14.803 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:12:26.314 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 1 store with id layer-1
+2022-03-25T19:12:26.314 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 2
+2022-03-25T19:12:26.314 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 2
+2022-03-25T19:12:26.314 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:12:29.794 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:12:41.967 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 1 store with id layer-1
+2022-03-25T19:12:41.967 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 2
+2022-03-25T19:12:41.967 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 2
+2022-03-25T19:12:41.967 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:29:33.110 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:29:46.535 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 2 store with id layer-2
+2022-03-25T19:29:46.535 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 3
+2022-03-25T19:29:46.535 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 3
+2022-03-25T19:29:46.536 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:30:05.615 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:30:19.041 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 2 store with id layer-2
+2022-03-25T19:30:19.041 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 3
+2022-03-25T19:30:19.041 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 3
+2022-03-25T19:30:19.041 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:46:27.941 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:46:40.011 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 3 store with id layer-3
+2022-03-25T19:46:40.011 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 4
+2022-03-25T19:46:40.011 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 4
+2022-03-25T19:46:40.015 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T19:47:13.917 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T19:47:24.511 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 3 store with id layer-3
+2022-03-25T19:47:24.511 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 4
+2022-03-25T19:47:24.511 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 4
+2022-03-25T19:47:24.511 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:02:39.677 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:02:52.101 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 4 store with id layer-4
+2022-03-25T20:02:52.101 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 5
+2022-03-25T20:02:52.101 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 5
+2022-03-25T20:02:52.101 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:03:42.987 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:03:55.841 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 4 store with id layer-4
+2022-03-25T20:03:55.841 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 5
+2022-03-25T20:03:55.841 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 5
+2022-03-25T20:03:55.863 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:19:05.360 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:19:16.555 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 5 store with id layer-5
+2022-03-25T20:19:16.555 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 6
+2022-03-25T20:19:16.555 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 6
+2022-03-25T20:19:16.567 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:20:17.332 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:20:29.936 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 5 store with id layer-5
+2022-03-25T20:20:29.936 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 6
+2022-03-25T20:20:29.936 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 6
+2022-03-25T20:20:29.936 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:34:52.489 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:35:04.102 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 6 store with id layer-6
+2022-03-25T20:35:04.102 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 7
+2022-03-25T20:35:04.102 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 7
+2022-03-25T20:35:04.102 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:36:14.630 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:36:25.848 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 6 store with id layer-6
+2022-03-25T20:36:25.848 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 7
+2022-03-25T20:36:25.848 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 7
+2022-03-25T20:36:25.848 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:50:37.052 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:50:50.020 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 7 store with id layer-7
+2022-03-25T20:50:50.020 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 8
+2022-03-25T20:50:50.020 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 8
+2022-03-25T20:50:50.020 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T20:52:05.261 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T20:52:17.908 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 7 store with id layer-7
+2022-03-25T20:52:17.908 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 8
+2022-03-25T20:52:17.908 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 8
+2022-03-25T20:52:17.908 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:07:04.834 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:07:17.369 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 8 store with id layer-8
+2022-03-25T21:07:17.369 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 9
+2022-03-25T21:07:17.369 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 9
+2022-03-25T21:07:17.369 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:08:34.977 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:08:45.696 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 8 store with id layer-8
+2022-03-25T21:08:45.696 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 9
+2022-03-25T21:08:45.696 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 9
+2022-03-25T21:08:45.696 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:22:30.224 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:22:41.448 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 9 store with id layer-9
+2022-03-25T21:22:41.448 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 10
+2022-03-25T21:22:41.448 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 10
+2022-03-25T21:22:41.448 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:23:57.251 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:24:07.655 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 9 store with id layer-9
+2022-03-25T21:24:07.655 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 10
+2022-03-25T21:24:07.655 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 10
+2022-03-25T21:24:07.655 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:37:37.711 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:37:47.414 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 10 store with id layer-10
+2022-03-25T21:37:47.414 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 11
+2022-03-25T21:37:47.414 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 11
+2022-03-25T21:37:47.415 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:39:03.387 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:39:12.575 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 10 store with id layer-10
+2022-03-25T21:39:12.575 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Layer 11
+2022-03-25T21:39:12.575 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > Creating labels for layer 11
+2022-03-25T21:39:12.575 INFO storage_proofs_porep::stacked::vanilla::create_label::multi > created label runner
+2022-03-25T21:52:43.329 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:52:52.670 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 11 store with id layer-11
+2022-03-25T21:52:58.751 INFO filecoin_proofs::api::seal > seal_pre_commit_phase1:finish: SectorId(600)
+2022-03-25T21:52:58.751 INFO filcrypto::proofs::api > seal_pre_commit_phase1: finish
+2022-03-25T21:52:58.751+0800	INFO	lotus-recover	lotus-recover/main.go:355	[600] Running replication(2)...
+2022-03-25T21:52:58.751 INFO filcrypto::proofs::api > seal_pre_commit_phase2: start
+2022-03-25T21:52:58.751 INFO filecoin_proofs::api > validate_cache_for_precommit_phase2:start
+2022-03-25T21:52:58.751 INFO filecoin_proofs::api > validate_cache_for_precommit_phase2:finish
+2022-03-25T21:52:58.751 INFO filecoin_proofs::api::seal > seal_pre_commit_phase2:start
+2022-03-25T21:52:58.751 INFO storage_proofs_porep::stacked::vanilla::proof > replicate_phase2
+2022-03-25T21:52:58.751 INFO storage_proofs_porep::stacked::vanilla::proof > Building trees [1048576 descriptors max available]
+2022-03-25T21:52:58.751 INFO storage_proofs_porep::stacked::vanilla::proof > generating tree c using the GPU
+2022-03-25T21:52:58.751 INFO storage_proofs_porep::stacked::vanilla::proof > Building column hashes
+2022-03-25T21:52:59.067 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T21:52:59.104 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T21:53:25.204 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:53:43.338 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 1/8 of length 153391689
+2022-03-25T21:53:51.676 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:54:15.809 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:54:23.966 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 2/8 of length 153391689
+2022-03-25T21:54:41.415 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:54:41.681 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   storing labels on disk
+2022-03-25T21:54:52.351 INFO storage_proofs_porep::stacked::vanilla::create_label::multi >   generated layer 11 store with id layer-11
+2022-03-25T21:54:58.520 INFO filecoin_proofs::api::seal > seal_pre_commit_phase1:finish: SectorId(601)
+2022-03-25T21:54:58.520 INFO filcrypto::proofs::api > seal_pre_commit_phase1: finish
+2022-03-25T21:55:08.382 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:55:10.920 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 3/8 of length 153391689
+2022-03-25T21:55:32.832 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:55:51.493 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 4/8 of length 153391689
+2022-03-25T21:55:55.856 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:56:17.408 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T21:56:31.189 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 5/8 of length 153391689
+2022-03-25T21:57:10.738 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 6/8 of length 153391689
+2022-03-25T21:57:49.982 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 7/8 of length 153391689
+2022-03-25T21:58:29.230 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 8/8 of length 153391689
+2022-03-25T21:58:34.650 INFO storage_proofs_porep::stacked::vanilla::proof > tree_c done
+2022-03-25T21:58:34.650 INFO storage_proofs_porep::stacked::vanilla::proof > building tree_r_last
+2022-03-25T21:58:34.650 INFO storage_proofs_porep::stacked::vanilla::proof > generating tree r last using the GPU
+2022-03-25T21:58:34.681 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T21:58:41.105 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 1/8
+2022-03-25T21:58:51.854 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 2/8
+2022-03-25T21:59:03.733 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 3/8
+2022-03-25T21:59:18.647 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 4/8
+2022-03-25T21:59:31.249 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 5/8
+2022-03-25T21:59:44.866 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 6/8
+2022-03-25T21:59:56.433 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 7/8
+2022-03-25T22:00:09.492 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 8/8
+2022-03-25T22:00:17.919 INFO storage_proofs_porep::stacked::vanilla::proof > tree_r_last done
+2022-03-25T22:00:17.919 INFO storage_proofs_core::data > dropping data /mnt/md0/lotus-recover/recover150007549/sealed/s-t032104-600
+2022-03-25T22:00:19.305 INFO filecoin_proofs::api::seal > seal_pre_commit_phase2:finish
+2022-03-25T22:00:19.305 INFO filcrypto::proofs::api > seal_pre_commit_phase2: finish
+2022-03-25T22:00:19.305 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:00:19.305 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:00:19.305 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:00:19.305 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(600)
+2022-03-25T22:00:19.541 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(600)
+2022-03-25T22:00:19.660 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:00:19.670 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:00:19.670 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:00:19.670 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:00:19.670 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(600)
+2022-03-25T22:00:19.825 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(600)
+2022-03-25T22:00:19.939 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:00:19.948 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:00:19.948 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:00:19.948 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:00:19.948 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(600)
+2022-03-25T22:00:20.103 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(600)
+2022-03-25T22:00:20.228 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:00:20.237 INFO filecoin_proofs::api::post_util > clear_cache:start
+2022-03-25T22:00:48.286 INFO filecoin_proofs::api::post_util > clear_cache:finish
+2022-03-25T22:00:48.286+0800	INFO	lotus-recover	lotus-recover/main.go:355	[601] Running replication(2)...
+2022-03-25T22:00:48.286 INFO filcrypto::proofs::api > seal_pre_commit_phase2: start
+2022-03-25T22:00:48.286 INFO filecoin_proofs::api > validate_cache_for_precommit_phase2:start
+2022-03-25T22:00:48.286 INFO filecoin_proofs::api > validate_cache_for_precommit_phase2:finish
+2022-03-25T22:00:48.286 INFO filecoin_proofs::api::seal > seal_pre_commit_phase2:start
+2022-03-25T22:00:48.286 INFO storage_proofs_porep::stacked::vanilla::proof > replicate_phase2
+2022-03-25T22:00:48.286 INFO storage_proofs_porep::stacked::vanilla::proof > Building trees [1048576 descriptors max available]
+2022-03-25T22:00:48.286 INFO storage_proofs_porep::stacked::vanilla::proof > generating tree c using the GPU
+2022-03-25T22:00:48.286 INFO storage_proofs_porep::stacked::vanilla::proof > Building column hashes
+2022-03-25T22:00:48.312 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T22:00:48.393 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T22:01:10.835 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:01:32.636 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 1/8 of length 153391689
+2022-03-25T22:01:36.910 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:02:02.256 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:02:14.735 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 2/8 of length 153391689
+2022-03-25T22:02:31.293 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:02:57.273 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:03:01.039 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 3/8 of length 153391689
+2022-03-25T22:03:27.954 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:03:57.733 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 4/8 of length 153391689
+2022-03-25T22:04:00.619 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:04:29.900 INFO storage_proofs_porep::stacked::vanilla::proof > 重新分配内存:chunked_nodes_count:217728,resetting:400000
+2022-03-25T22:05:00.817 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 5/8 of length 153391689
+2022-03-25T22:05:57.122 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 6/8 of length 153391689
+2022-03-25T22:06:57.147 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 7/8 of length 153391689
+2022-03-25T22:08:04.271 INFO storage_proofs_porep::stacked::vanilla::proof > persisting base tree_c 8/8 of length 153391689
+2022-03-25T22:08:09.137 INFO storage_proofs_porep::stacked::vanilla::proof > tree_c done
+2022-03-25T22:08:09.137 INFO storage_proofs_porep::stacked::vanilla::proof > building tree_r_last
+2022-03-25T22:08:09.137 INFO storage_proofs_porep::stacked::vanilla::proof > generating tree r last using the GPU
+2022-03-25T22:08:09.170 INFO neptune::proteus::program > Using kernel on CUDA.
+2022-03-25T22:08:15.580 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 1/8
+2022-03-25T22:08:28.461 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 2/8
+2022-03-25T22:08:42.638 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 3/8
+2022-03-25T22:08:58.987 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 4/8
+2022-03-25T22:09:12.040 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 5/8
+2022-03-25T22:09:26.686 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 6/8
+2022-03-25T22:09:41.500 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 7/8
+2022-03-25T22:09:57.368 INFO storage_proofs_porep::stacked::vanilla::proof > building base tree_r_last with GPU 8/8
+2022-03-25T22:10:08.084 INFO storage_proofs_porep::stacked::vanilla::proof > tree_r_last done
+2022-03-25T22:10:08.084 INFO storage_proofs_core::data > dropping data /mnt/md0/lotus-recover/recover150007549/sealed/s-t032104-601
+2022-03-25T22:10:12.174 INFO filecoin_proofs::api::seal > seal_pre_commit_phase2:finish
+2022-03-25T22:10:12.174 INFO filcrypto::proofs::api > seal_pre_commit_phase2: finish
+2022-03-25T22:10:12.174 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:10:12.174 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:10:12.174 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:10:12.174 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(601)
+2022-03-25T22:10:12.407 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(601)
+2022-03-25T22:10:12.527 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:10:12.539 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:10:12.539 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:10:12.540 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:10:12.540 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(601)
+2022-03-25T22:10:12.932 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(601)
+2022-03-25T22:10:13.290 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:10:13.324 INFO filcrypto::proofs::api > seal_commit_phase1: start
+2022-03-25T22:10:13.324 INFO filecoin_proofs::api > validate_cache_for_commit:start
+2022-03-25T22:10:13.324 INFO filecoin_proofs::api > validate_cache_for_commit:finish
+2022-03-25T22:10:13.324 INFO filecoin_proofs::api::seal > seal_commit_phase1:start: SectorId(601)
+2022-03-25T22:10:13.594 INFO filecoin_proofs::api::seal > seal_commit_phase1:finish: SectorId(601)
+2022-03-25T22:10:13.707 INFO filcrypto::proofs::api > seal_commit_phase1: finish
+2022-03-25T22:10:13.720 INFO filecoin_proofs::api::post_util > clear_cache:start
+2022-03-25T22:10:41.705 INFO filecoin_proofs::api::post_util > clear_cache:finish

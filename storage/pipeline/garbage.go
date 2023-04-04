@@ -8,7 +8,8 @@ import (
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
 )
 
-func (m *Sealing) PledgeSector(ctx context.Context) (storiface.SectorRef, error) {
+//yungojs
+func (m *Sealing) PledgeSector(ctx context.Context,cur uint64) (storiface.SectorRef, error) {
 	m.startupWait.Wait()
 
 	m.inputLk.Lock()
@@ -30,7 +31,8 @@ func (m *Sealing) PledgeSector(ctx context.Context) (storiface.SectorRef, error)
 		return storiface.SectorRef{}, xerrors.Errorf("getting seal proof type: %w", err)
 	}
 
-	sid, err := m.createSector(ctx, cfg, spt)
+	//yungojs
+	sid, err := m.createSector(ctx, cfg, spt,cur)
 	if err != nil {
 		return storiface.SectorRef{}, err
 	}

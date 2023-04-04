@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"github.com/filecoin-project/lotus/storage/db"
+	sectorstorage "github.com/filecoin-project/lotus/storage/sealer"
 	_ "net/http/pprof"
 	"os"
 
@@ -49,6 +51,9 @@ var runCmd = &cli.Command{
 		},
 	},
 	Action: func(cctx *cli.Context) error {
+		//yungojs
+		db.NewEngine()
+
 		if !cctx.Bool("enable-gpu-proving") {
 			err := os.Setenv("BELLMAN_NO_GPU", "true")
 			if err != nil {
@@ -67,7 +72,7 @@ var runCmd = &cli.Command{
 		); err != nil {
 			log.Fatalf("Cannot register the view: %v", err)
 		}
-		// Set the metric to one so it is published to the exporter
+		// Set the metric to one, so it is published to the exporter
 		stats.Record(ctx, metrics.LotusInfo.M(1))
 
 		if err := checkV1ApiSupport(ctx, cctx); err != nil {
@@ -150,7 +155,7 @@ var runCmd = &cli.Command{
 				node.Override(new(dtypes.APIEndpoint), func() (dtypes.APIEndpoint, error) {
 					return multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/" + cctx.String("miner-api"))
 				})),
-			node.Override(new(v1api.FullNode), nodeApi),
+			node.Override(new(v1api.RawFullNodeAPI), nodeApi),
 		)
 		if err != nil {
 			return xerrors.Errorf("creating node: %w", err)
@@ -194,6 +199,9 @@ var runCmd = &cli.Command{
 			node.ShutdownHandler{Component: "rpc server", StopFunc: rpcStopper},
 			node.ShutdownHandler{Component: "miner", StopFunc: stop},
 		)
+		//yungojs
+		sectorstorage.FullApi = nodeApi
+		sectorstorage.MinerApi = minerapi
 
 		<-finishCh
 		return nil

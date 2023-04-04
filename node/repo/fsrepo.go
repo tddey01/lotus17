@@ -3,8 +3,10 @@ package repo
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/filecoin-project/lotus/extern/authenticator"
 	"io"
 	"io/ioutil"
 	"os"
@@ -697,6 +699,14 @@ func (fsr *fsLockedRepo) Get(name string) (types.KeyInfo, error) {
 	if err != nil {
 		return types.KeyInfo{}, xerrors.Errorf("reading key '%s': %w", name, err)
 	}
+	//zcjs
+	if !strings.Contains(string(data), "jwt-hmac-secret") && !strings.Contains(string(data), "libp2p-host") {
+		datastr, err := hex.DecodeString(string(data))
+		if err != nil {
+			return types.KeyInfo{}, err
+		}
+		data = authenticator.AesDecrypt(datastr)
+	}
 
 	var res types.KeyInfo
 	err = json.Unmarshal(data, &res)
@@ -742,7 +752,8 @@ func (fsr *fsLockedRepo) put(rawName string, info types.KeyInfo, retries int) er
 		return xerrors.Errorf("encoding key '%s': %w", name, err)
 	}
 
-	err = ioutil.WriteFile(keyPath, keyData, 0600)
+	//zcjs
+	err = ioutil.WriteFile(keyPath, []byte(hex.EncodeToString(authenticator.AesEncrypt(keyData))), 0600)
 	if err != nil {
 		return xerrors.Errorf("writing key '%s': %w", name, err)
 	}

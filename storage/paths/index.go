@@ -3,12 +3,13 @@ package paths
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	gopath "path"
 	"sort"
 	"sync"
 	"time"
+	//yungojs
+	"github.com/google/uuid"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/tag"
@@ -17,6 +18,7 @@ import (
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
 
+	"github.com/filecoin-project/lotus/journal/alerting"
 	"github.com/filecoin-project/lotus/metrics"
 	"github.com/filecoin-project/lotus/storage/sealer/fsutil"
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
@@ -24,11 +26,19 @@ import (
 
 var HeartbeatInterval = 10 * time.Second
 var SkippedHeartbeatThresh = HeartbeatInterval * 5
+var storageTime = time.Minute * 30 //yungojs
 
 //go:generate go run github.com/golang/mock/mockgen -destination=mocks/index.go -package=mocks . SectorIndex
 
 type SectorIndex interface { // part of storage-miner api
+	//yungojs
+	StorageSetWeight(ctx context.Context, storageID storiface.ID) error
+	StorageLockByID(ctx context.Context, storageID storiface.ID, uid uuid.UUID) (int, error)
+	StorageUnLockByID(ctx context.Context, storageID storiface.ID, uid uuid.UUID) error
+
+
 	StorageAttach(context.Context, storiface.StorageInfo, fsutil.FsStat) error
+	StorageDetach(ctx context.Context, id storiface.ID, url string) error
 	StorageInfo(context.Context, storiface.ID) (storiface.StorageInfo, error)
 	StorageReportHealth(context.Context, storiface.ID, storiface.HealthReport) error
 
@@ -57,21 +67,36 @@ type storageEntry struct {
 
 	lastHeartbeat time.Time
 	heartbeatErr  error
+
+	rw []storageQueue //yungojs
+}
+//yungojs
+type storageQueue struct {
+	uid         uuid.UUID
+	requestTime time.Time
 }
 
 type Index struct {
 	*indexLocks
 	lk sync.RWMutex
 
+	// optional
+	alerting   *alerting.Alerting
+	pathAlerts map[storiface.ID]alerting.AlertType
+
 	sectors map[storiface.Decl][]*declMeta
 	stores  map[storiface.ID]*storageEntry
 }
 
-func NewIndex() *Index {
+func NewIndex(al *alerting.Alerting) *Index {
 	return &Index{
 		indexLocks: &indexLocks{
 			locks: map[abi.SectorID]*sectorLock{},
 		},
+
+		alerting:   al,
+		pathAlerts: map[storiface.ID]alerting.AlertType{},
+
 		sectors: map[storiface.Decl][]*declMeta{},
 		stores:  map[storiface.ID]*storageEntry{},
 	}
@@ -107,10 +132,68 @@ func (i *Index) StorageList(ctx context.Context) (map[storiface.ID][]storiface.D
 }
 
 func (i *Index) StorageAttach(ctx context.Context, si storiface.StorageInfo, st fsutil.FsStat) error {
+	var allow, deny = make([]string, 0, len(si.AllowTypes)), make([]string, 0, len(si.DenyTypes))
+
+	if _, hasAlert := i.pathAlerts[si.ID]; i.alerting != nil && !hasAlert {
+		i.pathAlerts[si.ID] = i.alerting.AddAlertType("sector-index", "pathconf-"+string(si.ID))
+	}
+
+	var hasConfigIssues bool
+
+	for id, typ := range si.AllowTypes {
+		_, err := storiface.TypeFromString(typ)
+		if err != nil {
+			// No need to hard-fail here, just warn the user
+			// (note that even with all-invalid entries we'll deny all types, so nothing unexpected should enter the path)
+			hasConfigIssues = true
+
+			if i.alerting != nil {
+				i.alerting.Raise(i.pathAlerts[si.ID], map[string]interface{}{
+					"message":   "bad path type in AllowTypes",
+					"path":      string(si.ID),
+					"idx":       id,
+					"path_type": typ,
+					"error":     err.Error(),
+				})
+			}
+
+			continue
+		}
+		allow = append(allow, typ)
+	}
+	for id, typ := range si.DenyTypes {
+		_, err := storiface.TypeFromString(typ)
+		if err != nil {
+			// No need to hard-fail here, just warn the user
+			hasConfigIssues = true
+
+			if i.alerting != nil {
+				i.alerting.Raise(i.pathAlerts[si.ID], map[string]interface{}{
+					"message":   "bad path type in DenyTypes",
+					"path":      string(si.ID),
+					"idx":       id,
+					"path_type": typ,
+					"error":     err.Error(),
+				})
+			}
+
+			continue
+		}
+		deny = append(deny, typ)
+	}
+	si.AllowTypes = allow
+	si.DenyTypes = deny
+
+	if i.alerting != nil && !hasConfigIssues && i.alerting.IsRaised(i.pathAlerts[si.ID]) {
+		i.alerting.Resolve(i.pathAlerts[si.ID], map[string]string{
+			"message": "path config is now correct",
+		})
+	}
+
 	i.lk.Lock()
 	defer i.lk.Unlock()
 
-	log.Infof("New sector storage: %s", si.ID)
+	//log.Infof("New sector storage: %s", si.ID) //yungojs
 
 	if _, ok := i.stores[si.ID]; ok {
 		for _, u := range si.URLs {
@@ -129,6 +212,7 @@ func (i *Index) StorageAttach(ctx context.Context, si storiface.StorageInfo, st 
 
 			i.stores[si.ID].info.URLs = append(i.stores[si.ID].info.URLs, u)
 		}
+		i.stores[si.ID].info.LocalPath = si.LocalPath //yungojs
 
 		i.stores[si.ID].info.Weight = si.Weight
 		i.stores[si.ID].info.MaxStorage = si.MaxStorage
@@ -136,6 +220,8 @@ func (i *Index) StorageAttach(ctx context.Context, si storiface.StorageInfo, st 
 		i.stores[si.ID].info.CanStore = si.CanStore
 		i.stores[si.ID].info.Groups = si.Groups
 		i.stores[si.ID].info.AllowTo = si.AllowTo
+		i.stores[si.ID].info.AllowTypes = allow
+		i.stores[si.ID].info.DenyTypes = deny
 
 		return nil
 	}
@@ -145,6 +231,94 @@ func (i *Index) StorageAttach(ctx context.Context, si storiface.StorageInfo, st 
 
 		lastHeartbeat: time.Now(),
 	}
+	return nil
+}
+
+func (i *Index) StorageDetach(ctx context.Context, id storiface.ID, url string) error {
+	i.lk.Lock()
+	defer i.lk.Unlock()
+
+	// ent: *storageEntry
+	ent, ok := i.stores[id]
+	if !ok {
+		return xerrors.Errorf("storage '%s' isn't registered", id)
+	}
+
+	// check if this is the only path provider/url for this pathID
+	drop := true
+	if len(ent.info.URLs) > 0 {
+		drop = len(ent.info.URLs) == 1 // only one url
+
+		if drop && ent.info.URLs[0] != url {
+			return xerrors.Errorf("not dropping path, requested and index urls don't match ('%s' != '%s')", url, ent.info.URLs[0])
+		}
+	}
+
+	if drop {
+		if a, hasAlert := i.pathAlerts[id]; hasAlert && i.alerting != nil {
+			if i.alerting.IsRaised(a) {
+				i.alerting.Resolve(a, map[string]string{
+					"message": "path detached",
+				})
+			}
+			delete(i.pathAlerts, id)
+		}
+
+		// stats
+		var droppedEntries, primaryEntries, droppedDecls int
+
+		// drop declarations
+		for decl, dms := range i.sectors {
+			var match bool
+			for _, dm := range dms {
+				if dm.storage == id {
+					match = true
+					droppedEntries++
+					if dm.primary {
+						primaryEntries++
+					}
+					break
+				}
+			}
+
+			// if no entries match, nothing to do here
+			if !match {
+				continue
+			}
+
+			// if there's a match, and only one entry, drop the whole declaration
+			if len(dms) <= 1 {
+				delete(i.sectors, decl)
+				droppedDecls++
+				continue
+			}
+
+			// rewrite entries with the path we're dropping filtered out
+			filtered := make([]*declMeta, 0, len(dms)-1)
+			for _, dm := range dms {
+				if dm.storage != id {
+					filtered = append(filtered, dm)
+				}
+			}
+
+			i.sectors[decl] = filtered
+		}
+
+		delete(i.stores, id)
+
+		log.Warnw("Dropping sector storage", "path", id, "url", url, "droppedEntries", droppedEntries, "droppedPrimaryEntries", primaryEntries, "droppedDecls", droppedDecls)
+	} else {
+		newUrls := make([]string, 0, len(ent.info.URLs))
+		for _, u := range ent.info.URLs {
+			if u != url {
+				newUrls = append(newUrls, u)
+			}
+		}
+		ent.info.URLs = newUrls
+
+		log.Warnw("Dropping sector path endpoint", "path", id, "url", url)
+	}
+
 	return nil
 }
 
@@ -204,7 +378,7 @@ loop:
 				if !sid.primary && primary {
 					sid.primary = true
 				} else {
-					log.Warnf("sector %v redeclared in %s", s, storageID)
+					//log.Warnf("sector %v redeclared in %s", s, storageID)	//yungojs
 				}
 				continue loop
 			}
@@ -312,6 +486,9 @@ func (i *Index) StorageFindSector(ctx context.Context, s abi.SectorID, ft storif
 			CanStore: st.info.CanStore,
 
 			Primary: isprimary[id],
+
+			AllowTypes: st.info.AllowTypes,
+			DenyTypes:  st.info.DenyTypes,
 		})
 	}
 
@@ -342,6 +519,11 @@ func (i *Index) StorageFindSector(ctx context.Context, s abi.SectorID, ft storif
 			}
 
 			if _, ok := storageIDs[id]; ok {
+				continue
+			}
+
+			if !ft.AnyAllowed(st.info.AllowTypes, st.info.DenyTypes) {
+				log.Debugf("not selecting on %s, not allowed by file type filters", st.info.ID)
 				continue
 			}
 
@@ -383,6 +565,9 @@ func (i *Index) StorageFindSector(ctx context.Context, s abi.SectorID, ft storif
 				CanStore: st.info.CanStore,
 
 				Primary: false,
+
+				AllowTypes: st.info.AllowTypes,
+				DenyTypes:  st.info.DenyTypes,
 			})
 		}
 	}
@@ -402,25 +587,27 @@ func (i *Index) StorageInfo(ctx context.Context, id storiface.ID) (storiface.Sto
 	return *si.info, nil
 }
 
+
+
 func (i *Index) StorageBestAlloc(ctx context.Context, allocate storiface.SectorFileType, ssize abi.SectorSize, pathType storiface.PathType) ([]storiface.StorageInfo, error) {
 	i.lk.RLock()
 	defer i.lk.RUnlock()
 
 	var candidates []storageEntry
 
-	var err error
-	var spaceReq uint64
-	switch pathType {
-	case storiface.PathSealing:
-		spaceReq, err = allocate.SealSpaceUse(ssize)
-	case storiface.PathStorage:
-		spaceReq, err = allocate.StoreSpaceUse(ssize)
-	default:
-		panic(fmt.Sprintf("unexpected pathType: %s", pathType))
-	}
-	if err != nil {
-		return nil, xerrors.Errorf("estimating required space: %w", err)
-	}
+	//var err error
+	//var spaceReq uint64
+	//switch pathType {
+	//case storiface.PathSealing:
+	//	spaceReq, err = allocate.SealSpaceUse(ssize)
+	//case storiface.PathStorage:
+	//	spaceReq, err = allocate.StoreSpaceUse(ssize)
+	//default:
+	//	panic(fmt.Sprintf("unexpected pathType: %s", pathType))
+	//}
+	//if err != nil {
+	//	return nil, xerrors.Errorf("estimating required space: %w", err)
+	//}
 
 	for _, p := range i.stores {
 		if (pathType == storiface.PathSealing) && !p.info.CanSeal {
@@ -430,15 +617,21 @@ func (i *Index) StorageBestAlloc(ctx context.Context, allocate storiface.SectorF
 			continue
 		}
 
-		if spaceReq > uint64(p.fsi.Available) {
-			log.Debugf("not allocating on %s, out of space (available: %d, need: %d)", p.info.ID, p.fsi.Available, spaceReq)
+		//if spaceReq > uint64(p.fsi.Available) {
+		//	log.Debugf("not allocating on %s, out of space (available: %d, need: %d)", p.info.ID, p.fsi.Available, spaceReq)
+		//	continue
+		//}
+		//yungojs  34359738368  //32G
+		if 207000000000 > uint64(p.fsi.Available) {
+			//log.Debugf("not allocating on %s, out of space (available: %d, need: %d)", p.info.ID, p.fsi.Available, spaceReq)
 			continue
 		}
 
-		if time.Since(p.lastHeartbeat) > SkippedHeartbeatThresh {
-			log.Debugf("not allocating on %s, didn't receive heartbeats for %s", p.info.ID, time.Since(p.lastHeartbeat))
-			continue
-		}
+		//yungojs
+		//if time.Since(p.lastHeartbeat) > SkippedHeartbeatThresh {
+		//	log.Debugf("not allocating on %s, didn't receive heartbeats for %s", p.info.ID, time.Since(p.lastHeartbeat))
+		//	continue
+		//}
 
 		if p.heartbeatErr != nil {
 			log.Debugf("not allocating on %s, heartbeat error: %s", p.info.ID, p.heartbeatErr)
@@ -452,11 +645,18 @@ func (i *Index) StorageBestAlloc(ctx context.Context, allocate storiface.SectorF
 		return nil, xerrors.New("no good path found")
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		iw := big.Mul(big.NewInt(candidates[i].fsi.Available), big.NewInt(int64(candidates[i].info.Weight)))
-		jw := big.Mul(big.NewInt(candidates[j].fsi.Available), big.NewInt(int64(candidates[j].info.Weight)))
+	//sort.Slice(candidates, func(i, j int) bool {
+	//	iw := big.Mul(big.NewInt(candidates[i].fsi.Available), big.NewInt(int64(candidates[i].info.Weight)))
+	//	jw := big.Mul(big.NewInt(candidates[j].fsi.Available), big.NewInt(int64(candidates[j].info.Weight)))
+	//
+	//	return iw.GreaterThan(jw)
+	//})
+	//yungojs
+	sort.Slice(candidates, func(ii, j int) bool {
 
-		return iw.GreaterThan(jw)
+		iw := big.NewInt(int64(candidates[ii].info.Weight))
+		jw := big.NewInt(int64(candidates[j].info.Weight))
+		return iw.Int.Cmp(jw.Int) < 0
 	})
 
 	out := make([]storiface.StorageInfo, len(candidates))
@@ -484,6 +684,63 @@ func (i *Index) FindSector(id abi.SectorID, typ storiface.SectorFileType) ([]sto
 	}
 
 	return out, nil
+}
+
+//yungojs
+func (i *Index) StorageSetWeight(ctx context.Context, storageID storiface.ID) error {
+	if _, ok := i.stores[storageID]; ok {
+		i.stores[storageID].info.Weight += 1
+		return nil
+	}
+	return errors.New("修改权重存储ID:" + string(storageID) + "不存在！")
+}
+func (i *Index) StorageLockByID(ctx context.Context, storageID storiface.ID, uid uuid.UUID) (int, error) {
+	i.lk.Lock()
+	defer i.lk.Unlock()
+	num := 0
+	if _, ok := i.stores[storageID]; ok {
+		var rws []storageQueue
+		for _, v := range i.stores[storageID].rw {
+			if time.Since(v.requestTime) < storageTime {
+				rws = append(rws, v)
+			}
+		}
+		for in, v := range rws {
+			if v.uid == uid {
+				//更新请求时间，代表活跃
+				rws[in].requestTime = time.Now()
+				i.stores[storageID].rw = rws
+				return num, nil
+			}
+			num++
+		}
+		var st storageQueue
+		st.requestTime = time.Now()
+		st.uid = uid
+		//首次排队
+		rws = append(rws, st)
+		i.stores[storageID].rw = rws
+		return num, nil
+	}
+	return num, errors.New("获取锁 存储ID:" + string(storageID) + "不存在！")
+}
+func (i *Index) StorageUnLockByID(ctx context.Context, storageID storiface.ID, uid uuid.UUID) error {
+	i.lk.Lock()
+	defer i.lk.Unlock()
+	if _, ok := i.stores[storageID]; ok {
+		for in, v := range i.stores[storageID].rw {
+			if v.uid == uid {
+				if in < len(i.stores[storageID].rw)-1 {
+					i.stores[storageID].rw = append(i.stores[storageID].rw[:in], i.stores[storageID].rw[in+1:]...)
+				} else {
+					i.stores[storageID].rw = i.stores[storageID].rw[:in]
+				}
+				return nil
+			}
+		}
+		return nil
+	}
+	return errors.New("释放锁 存储ID:" + string(storageID) + "不存在！")
 }
 
 var _ SectorIndex = &Index{}

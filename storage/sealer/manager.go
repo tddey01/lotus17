@@ -3,9 +3,20 @@ package sealer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sort"
+	"strings"
 	"sync"
+	"time"
+
+	"encoding/json"
+	//yungojs
+	record "github.com/filecoin-project/lotus/extern/record-task"
+	"io/ioutil"
+	"path/filepath"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
@@ -107,6 +118,7 @@ type Config struct {
 	ParallelFetchLimit int
 
 	// Local worker config
+	AllowSectorDownload      bool
 	AllowAddPiece            bool
 	AllowPreCommit1          bool
 	AllowPreCommit2          bool
@@ -115,6 +127,8 @@ type Config struct {
 	AllowReplicaUpdate       bool
 	AllowProveReplicaUpdate2 bool
 	AllowRegenSectorKey      bool
+
+	LocalWorkerName string
 
 	// ResourceFiltering instructs the system which resource filtering strategy
 	// to use when evaluating tasks against this worker. An empty value defaults
@@ -136,13 +150,14 @@ type StorageAuth http.Header
 type WorkerStateStore *statestore.StateStore
 type ManagerStateStore *statestore.StateStore
 
-func New(ctx context.Context, lstor *paths.Local, stor paths.Store, ls paths.LocalStorage, si paths.SectorIndex, sc Config, wss WorkerStateStore, mss ManagerStateStore) (*Manager, error) {
+//yungojs
+func New(ctx context.Context, lstor *paths.Local, stor paths.Store, ls paths.LocalStorage, si paths.SectorIndex, sc Config, wss WorkerStateStore, mss ManagerStateStore, tcalls WorkerStateStore, acalls WorkerStateStore) (*Manager, error) {
 	prover, err := ffiwrapper.New(&readonlyProvider{stor: lstor, index: si})
 	if err != nil {
 		return nil, xerrors.Errorf("creating prover instance: %w", err)
 	}
 
-	sh, err := newScheduler(sc.Assigner)
+	sh, err := newScheduler(sc.Assigner, wss, tcalls, acalls) //yungojs
 	if err != nil {
 		return nil, err
 	}
@@ -175,48 +190,73 @@ func New(ctx context.Context, lstor *paths.Local, stor paths.Store, ls paths.Loc
 	m.setupWorkTracker()
 
 	go m.sched.runSched()
-
-	localTasks := []sealtasks.TaskType{
-		sealtasks.TTCommit1, sealtasks.TTProveReplicaUpdate1, sealtasks.TTFinalize, sealtasks.TTFetch, sealtasks.TTFinalizeReplicaUpdate,
+	//yungojs
+	if os.Getenv("PLEDGE_MINER") == "true" {
+		go m.AutoPledge(ctx)
 	}
-	if sc.AllowAddPiece {
-		localTasks = append(localTasks, sealtasks.TTAddPiece, sealtasks.TTDataCid)
-	}
-	if sc.AllowPreCommit1 {
-		localTasks = append(localTasks, sealtasks.TTPreCommit1)
-	}
-	if sc.AllowPreCommit2 {
-		localTasks = append(localTasks, sealtasks.TTPreCommit2)
-	}
-	if sc.AllowCommit {
-		localTasks = append(localTasks, sealtasks.TTCommit2)
-	}
-	if sc.AllowUnseal {
-		localTasks = append(localTasks, sealtasks.TTUnseal)
-	}
-	if sc.AllowReplicaUpdate {
-		localTasks = append(localTasks, sealtasks.TTReplicaUpdate)
-	}
-	if sc.AllowProveReplicaUpdate2 {
-		localTasks = append(localTasks, sealtasks.TTProveReplicaUpdate2)
-	}
-	if sc.AllowRegenSectorKey {
-		localTasks = append(localTasks, sealtasks.TTRegenSectorKey)
-	}
-
-	wcfg := WorkerConfig{
-		IgnoreResourceFiltering: sc.ResourceFiltering == ResourceFilteringDisabled,
-		TaskTypes:               localTasks,
-	}
-	worker := NewLocalWorker(wcfg, stor, lstor, si, m, wss)
-	err = m.AddWorker(ctx, worker)
-	if err != nil {
-		return nil, xerrors.Errorf("adding local worker: %w", err)
-	}
+	//localTasks := []sealtasks.TaskType{
+	//	sealtasks.TTCommit1, sealtasks.TTProveReplicaUpdate1, sealtasks.TTFinalize, sealtasks.TTFetch, sealtasks.TTFinalizeReplicaUpdate,
+	//}
+	//if sc.AllowSectorDownload {
+	//	localTasks = append(localTasks, sealtasks.TTDownloadSector)
+	//}
+	//if sc.AllowAddPiece {
+	//	localTasks = append(localTasks, sealtasks.TTAddPiece, sealtasks.TTDataCid)
+	//}
+	//if sc.AllowPreCommit1 {
+	//	localTasks = append(localTasks, sealtasks.TTPreCommit1)
+	//}
+	//if sc.AllowPreCommit2 {
+	//	localTasks = append(localTasks, sealtasks.TTPreCommit2)
+	//}
+	//if sc.AllowCommit {
+	//	localTasks = append(localTasks, sealtasks.TTCommit2)
+	//}
+	//if sc.AllowUnseal {
+	//	localTasks = append(localTasks, sealtasks.TTUnseal)
+	//}
+	//if sc.AllowReplicaUpdate {
+	//	localTasks = append(localTasks, sealtasks.TTReplicaUpdate)
+	//}
+	//if sc.AllowProveReplicaUpdate2 {
+	//	localTasks = append(localTasks, sealtasks.TTProveReplicaUpdate2)
+	//}
+	//if sc.AllowRegenSectorKey {
+	//	localTasks = append(localTasks, sealtasks.TTRegenSectorKey)
+	//}
+	//
+	//wcfg := WorkerConfig{
+	//	IgnoreResourceFiltering: sc.ResourceFiltering == ResourceFilteringDisabled,
+	//	TaskTypes:               localTasks,
+	//	Name:                    sc.LocalWorkerName,
+	//}
+	//worker := NewLocalWorker(wcfg, stor, lstor, si, m, wss)
+	//err = m.AddWorker(ctx, worker)
+	//if err != nil {
+	//	return nil, xerrors.Errorf("adding local worker: %w", err)
+	//}
 
 	return m, nil
 }
 
+//yungojs
+func (m *Manager) ReacquireSectors(ctx context.Context, path string) error {
+	mb, err := ioutil.ReadFile(filepath.Join(path, "storage.json"))
+	if err != nil {
+		return xerrors.Errorf("中创：reading storage metadata for %s: %w", path, err)
+	}
+
+	var meta paths.StorageConfig
+	if err := json.Unmarshal(mb, &meta); err != nil {
+		return xerrors.Errorf("中创：unmarshalling storage metadata for %s: %w", path, err)
+	}
+	for _, v := range meta.StoragePaths {
+		if err := m.localStore.OpenPath(ctx, v.Path); err != nil {
+			return xerrors.Errorf("中创：opening local path: %w", err)
+		}
+	}
+	return nil
+}
 func (m *Manager) AddLocalStorage(ctx context.Context, path string) error {
 	path, err := homedir.Expand(path)
 	if err != nil {
@@ -233,6 +273,58 @@ func (m *Manager) AddLocalStorage(ctx context.Context, path string) error {
 		return xerrors.Errorf("get storage config: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) DetachLocalStorage(ctx context.Context, path string) error {
+	path, err := homedir.Expand(path)
+	if err != nil {
+		return xerrors.Errorf("expanding local path: %w", err)
+	}
+
+	// check that we have the path opened
+	lps, err := m.localStore.Local(ctx)
+	if err != nil {
+		return xerrors.Errorf("getting local path list: %w", err)
+	}
+
+	var localPath *storiface.StoragePath
+	for _, lp := range lps {
+		if lp.LocalPath == path {
+			lp := lp // copy to make the linter happy
+			localPath = &lp
+			break
+		}
+	}
+	if localPath == nil {
+		return xerrors.Errorf("no local paths match '%s'", path)
+	}
+
+	// drop from the persisted storage.json
+	var found bool
+	if err := m.ls.SetStorage(func(sc *paths.StorageConfig) {
+		out := make([]paths.LocalPath, 0, len(sc.StoragePaths))
+		for _, storagePath := range sc.StoragePaths {
+			if storagePath.Path != path {
+				out = append(out, storagePath)
+				continue
+			}
+			found = true
+		}
+		sc.StoragePaths = out
+	}); err != nil {
+		return xerrors.Errorf("set storage config: %w", err)
+	}
+	if !found {
+		// maybe this is fine?
+		return xerrors.Errorf("path not found in storage.json")
+	}
+
+	// unregister locally, drop from sector index
+	return m.localStore.ClosePath(ctx, localPath.ID)
+}
+
+func (m *Manager) RedeclareLocalStorage(ctx context.Context, id *storiface.ID, dropMissing bool) error {
+	return m.localStore.Redeclare(ctx, id, dropMissing)
 }
 
 func (m *Manager) AddWorker(ctx context.Context, w Worker) error {
@@ -260,7 +352,20 @@ func (m *Manager) AddWorker(ctx context.Context, w Worker) error {
 		m.winningPoStSched.MaybeAddWorker(wid, tasks, whnd) {
 		return nil
 	}
-
+	//yungojs
+	info, err := w.Info(ctx)
+	if err != nil {
+		return xerrors.Errorf("getting worker info: %w", err)
+	}
+	m.sched.workeripLk.Lock()
+	m.sched.ipworkerLk.Lock()
+	m.sched.hostnameipLk.Lock()
+	m.sched.workerip[wid] = info.Ip
+	m.sched.ipworker[info.Ip] = wid
+	m.sched.hostnameip[info.Hostname] = info.Ip
+	m.sched.workeripLk.Unlock()
+	m.sched.ipworkerLk.Unlock()
+	m.sched.hostnameipLk.Unlock()
 	return m.sched.runWorker(ctx, wid, whnd)
 }
 
@@ -432,15 +537,19 @@ func (m *Manager) SealPreCommit1(ctx context.Context, sector storiface.SectorRef
 
 	selector := newAllocSelector(m.index, storiface.FTCache|storiface.FTSealed, storiface.PathSealing)
 
-	err = m.sched.Schedule(ctx, sector, sealtasks.TTPreCommit1, selector, m.schedFetch(sector, storiface.FTUnsealed, storiface.PathSealing, storiface.AcquireMove), func(ctx context.Context, w Worker) error {
-		err := m.startWork(ctx, w, wk)(w.SealPreCommit1(ctx, sector, ticket, pieces))
-		if err != nil {
-			return err
-		}
+	err = m.sched.Schedule(ctx, sector, sealtasks.TTPreCommit1, selector,
+		//m.schedFetch(sector, storiface.FTUnsealed, storiface.PathSealing, storiface.AcquireMove),
+		//yungojs
+		schedNop,
+		func(ctx context.Context, w Worker) error {
+			err := m.startWork(ctx, w, wk)(w.SealPreCommit1(ctx, sector, ticket, pieces))
+			if err != nil {
+				return err
+			}
 
-		waitRes()
-		return nil
-	})
+			waitRes()
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -481,15 +590,19 @@ func (m *Manager) SealPreCommit2(ctx context.Context, sector storiface.SectorRef
 
 	selector := newExistingSelector(m.index, sector.ID, storiface.FTCache|storiface.FTSealed, true)
 
-	err = m.sched.Schedule(ctx, sector, sealtasks.TTPreCommit2, selector, m.schedFetch(sector, storiface.FTCache|storiface.FTSealed, storiface.PathSealing, storiface.AcquireMove), func(ctx context.Context, w Worker) error {
-		err := m.startWork(ctx, w, wk)(w.SealPreCommit2(ctx, sector, phase1Out))
-		if err != nil {
-			return err
-		}
+	err = m.sched.Schedule(ctx, sector, sealtasks.TTPreCommit2, selector,
+		//m.schedFetch(sector, storiface.FTCache|storiface.FTSealed, storiface.PathSealing, storiface.AcquireMove),
+		//yungojs
+		schedNop,
+		func(ctx context.Context, w Worker) error {
+			err := m.startWork(ctx, w, wk)(w.SealPreCommit2(ctx, sector, phase1Out))
+			if err != nil {
+				return err
+			}
 
-		waitRes()
-		return nil
-	})
+			waitRes()
+			return nil
+		})
 	if err != nil {
 		return storiface.SectorCids{}, err
 	}
@@ -533,15 +646,19 @@ func (m *Manager) SealCommit1(ctx context.Context, sector storiface.SectorRef, t
 	// generally very cheap / fast, and transferring data is not worth the effort
 	selector := newExistingSelector(m.index, sector.ID, storiface.FTCache|storiface.FTSealed, false)
 
-	err = m.sched.Schedule(ctx, sector, sealtasks.TTCommit1, selector, m.schedFetch(sector, storiface.FTCache|storiface.FTSealed, storiface.PathSealing, storiface.AcquireMove), func(ctx context.Context, w Worker) error {
-		err := m.startWork(ctx, w, wk)(w.SealCommit1(ctx, sector, ticket, seed, pieces, cids))
-		if err != nil {
-			return err
-		}
+	err = m.sched.Schedule(ctx, sector, sealtasks.TTCommit1, selector,
+		//m.schedFetch(sector, storiface.FTCache|storiface.FTSealed, storiface.PathSealing, storiface.AcquireMove),
+		//yungojs
+		schedNop,
+		func(ctx context.Context, w Worker) error {
+			err := m.startWork(ctx, w, wk)(w.SealCommit1(ctx, sector, ticket, seed, pieces, cids))
+			if err != nil {
+				return err
+			}
 
-		waitRes()
-		return nil
-	})
+			waitRes()
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
@@ -615,7 +732,8 @@ func (m *Manager) FinalizeSector(ctx context.Context, sector storiface.SectorRef
 
 	// Make sure that the sealed file is still in sealing storage; In case it already
 	// isn't, we want to do finalize in long-term storage
-	pathType := storiface.PathStorage
+	//yungojs
+	//pathType := storiface.PathStorage
 	{
 		sealedStores, err := m.index.StorageFindSector(ctx, sector.ID, storiface.FTSealed, 0, false)
 		if err != nil {
@@ -624,7 +742,8 @@ func (m *Manager) FinalizeSector(ctx context.Context, sector storiface.SectorRef
 
 		for _, store := range sealedStores {
 			if store.CanSeal {
-				pathType = storiface.PathSealing
+				//yungojs
+				//pathType = storiface.PathSealing
 				break
 			}
 		}
@@ -635,9 +754,27 @@ func (m *Manager) FinalizeSector(ctx context.Context, sector storiface.SectorRef
 	selector := newExistingSelector(m.index, sector.ID, storiface.FTCache, false)
 
 	err := m.sched.Schedule(ctx, sector, sealtasks.TTFinalize, selector,
-		m.schedFetch(sector, storiface.FTCache|unsealed, pathType, storiface.AcquireMove),
+		//yungojs
+		schedNop,
+		//m.schedFetch(sector, storiface.FTCache|unsealed, pathType, storiface.AcquireMove),
 		func(ctx context.Context, w Worker) error {
+			if os.Getenv("FINFORCE") == "true" {
+				_, _ = m.waitSimpleCall(ctx)(w.FinalizeSector(ctx, sector, keepUnsealed))
+				return nil
+			}
 			_, err := m.waitSimpleCall(ctx)(w.FinalizeSector(ctx, sector, keepUnsealed))
+			if err != nil {
+				si, err1 := m.index.StorageFindSector(ctx, sector.ID, storiface.FTSealed, 0, false)
+				if err1 != nil {
+					log.Warn("中创returnResult：", err1)
+				}
+				for _, v := range si {
+					if v.CanStore {
+						log.Info("已存在扇区1:", sector.ID, ",", v.ID)
+						return nil
+					}
+				}
+			}
 			return err
 		})
 	if err != nil {
@@ -657,9 +794,27 @@ func (m *Manager) FinalizeSector(ctx context.Context, sector storiface.SectorRef
 
 	// move stuff to long-term storage
 	err = m.sched.Schedule(ctx, sector, sealtasks.TTFetch, fetchSel,
-		m.schedFetch(sector, storiface.FTCache|storiface.FTSealed|moveUnsealed, storiface.PathStorage, storiface.AcquireMove),
+		//yungojs
+		schedNop,
+		//m.schedFetch(sector, storiface.FTCache|storiface.FTSealed|moveUnsealed, storiface.PathStorage, storiface.AcquireMove),
 		func(ctx context.Context, w Worker) error {
+			if os.Getenv("FINFORCE") == "true" {
+				_, _ = m.waitSimpleCall(ctx)(w.MoveStorage(ctx, sector, storiface.FTCache|storiface.FTSealed|moveUnsealed))
+				return nil
+			}
 			_, err := m.waitSimpleCall(ctx)(w.MoveStorage(ctx, sector, storiface.FTCache|storiface.FTSealed|moveUnsealed))
+			if err != nil {
+				si, err1 := m.index.StorageFindSector(ctx, sector.ID, storiface.FTSealed, 0, false)
+				if err1 != nil {
+					log.Warn("中创returnResult：", err1)
+				}
+				for _, v := range si {
+					if v.CanStore {
+						log.Info("已存在扇区2:", sector.ID, ",", v.ID)
+						return nil
+					}
+				}
+			}
 			return err
 		})
 	if err != nil {
@@ -1029,6 +1184,78 @@ func (m *Manager) ProveReplicaUpdate2(ctx context.Context, sector storiface.Sect
 	return out, waitErr
 }
 
+func (m *Manager) DownloadSectorData(ctx context.Context, sector storiface.SectorRef, finalized bool, src map[storiface.SectorFileType]storiface.SectorLocation) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var toFetch storiface.SectorFileType
+
+	// get a sorted list of sectors files to make a consistent work key from
+	ents := make([]struct {
+		T storiface.SectorFileType
+		S storiface.SectorLocation
+	}, 0, len(src))
+	for fileType, data := range src {
+		if len(fileType.AllSet()) != 1 {
+			return xerrors.Errorf("sector data entry must be for a single file type")
+		}
+
+		toFetch |= fileType
+
+		ents = append(ents, struct {
+			T storiface.SectorFileType
+			S storiface.SectorLocation
+		}{T: fileType, S: data})
+	}
+	sort.Slice(ents, func(i, j int) bool {
+		return ents[i].T < ents[j].T
+	})
+
+	// get a work key
+	wk, wait, cancel, err := m.getWork(ctx, sealtasks.TTDownloadSector, sector, ents)
+	if err != nil {
+		return xerrors.Errorf("getWork: %w", err)
+	}
+	defer cancel()
+
+	var waitErr error
+	waitRes := func() {
+		_, werr := m.waitWork(ctx, wk)
+		if werr != nil {
+			waitErr = werr
+			return
+		}
+	}
+
+	if wait { // already in progress
+		waitRes()
+		return waitErr
+	}
+
+	ptype := storiface.PathSealing
+	if finalized {
+		ptype = storiface.PathStorage
+	}
+
+	selector := newAllocSelector(m.index, toFetch, ptype)
+
+	err = m.sched.Schedule(ctx, sector, sealtasks.TTDownloadSector, selector, schedNop, func(ctx context.Context, w Worker) error {
+		err := m.startWork(ctx, w, wk)(w.DownloadSectorData(ctx, sector, finalized, src))
+		if err != nil {
+			return err
+		}
+
+		waitRes()
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return waitErr
+}
+
 func (m *Manager) ReturnDataCid(ctx context.Context, callID storiface.CallID, pi abi.PieceInfo, err *storiface.CallError) error {
 	return m.returnResult(ctx, callID, pi, err)
 }
@@ -1093,6 +1320,10 @@ func (m *Manager) ReturnReadPiece(ctx context.Context, callID storiface.CallID, 
 	return m.returnResult(ctx, callID, ok, err)
 }
 
+func (m *Manager) ReturnDownloadSector(ctx context.Context, callID storiface.CallID, err *storiface.CallError) error {
+	return m.returnResult(ctx, callID, nil, err)
+}
+
 func (m *Manager) ReturnFetch(ctx context.Context, callID storiface.CallID, err *storiface.CallError) error {
 	return m.returnResult(ctx, callID, nil, err)
 }
@@ -1145,27 +1376,171 @@ func (m *Manager) SchedDiag(ctx context.Context, doSched bool) (interface{}, err
 		CallToWork: map[string]string{},
 	}
 
-	m.workLk.Lock()
-
-	for w := range m.results {
-		i.ReturnedWork = append(i.ReturnedWork, w.String())
-	}
-
-	for id := range m.callRes {
-		i.EarlyRet = append(i.EarlyRet, id.String())
-	}
-
-	for w := range m.waitRes {
-		i.Waiting = append(i.Waiting, w.String())
-	}
-
-	for c, w := range m.callToWork {
-		i.CallToWork[c.String()] = w.String()
-	}
-
-	m.workLk.Unlock()
+	//yungojs
+	//m.workLk.Lock()
+	//
+	//for w := range m.results {
+	//	i.ReturnedWork = append(i.ReturnedWork, w.String())
+	//}
+	//
+	//for id := range m.callRes {
+	//	i.EarlyRet = append(i.EarlyRet, id.String())
+	//}
+	//
+	//for w := range m.waitRes {
+	//	i.Waiting = append(i.Waiting, w.String())
+	//}
+	//
+	//for c, w := range m.callToWork {
+	//	i.CallToWork[c.String()] = w.String()
+	//}
+	//
+	//m.workLk.Unlock()
 
 	return i, nil
+}
+
+//yungojs
+func (m *Manager) SchedAlreadyIssueInfo(ctx context.Context) (int64, error) {
+	t, err := NewP1Count(m.sched.alreadycalls)
+	defer func() {
+		t.FreeAlMt()
+	}()
+	fmt.Println("worker的IP：")
+	for k, v := range m.sched.ipworker {
+		fmt.Println("地址：", k, "----", "工人：", v)
+	}
+	return int64(t), err
+}
+func (m *Manager) SchedSetAlreadyIssue(ctx context.Context, num int64) error {
+	at, err := NewP1Count(m.sched.alreadycalls)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		at.FreeAlMt()
+	}()
+	return at.SetP1Count(m.sched.alreadycalls, num)
+}
+func (m *Manager) SchedAddAlreadyIssue(ctx context.Context, num int64) error {
+	at, err := NewP1Count(m.sched.alreadycalls)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		at.FreeAlMt()
+	}()
+	return at.AddP1CountByNum(m.sched.alreadycalls, num)
+}
+func (m *Manager) SchedSubAlreadyIssue(ctx context.Context, num int64) error {
+	at, err := NewP1Count(m.sched.alreadycalls)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		at.FreeAlMt()
+	}()
+	return at.SubP1CountByNum(m.sched.alreadycalls, num)
+}
+func (m *Manager) WorkerSetTaskCount(ctx context.Context, tc record.TaskCount) error {
+	return tc.SetTaskCount(m.sched.workcalls)
+}
+func (m *Manager) WorkerAddP1(ctx context.Context, Number abi.SectorNumber, uid uuid.UUID) error {
+	tc := record.NewTaskCount(m.sched.workcalls, uid.String())
+	defer tc.FreeTaskMt()
+	go func() {
+		for {
+			var sect SectorTask
+			sect.Sector = Number
+			ip := strings.Split(m.sched.workerip[storiface.WorkerID(uid)], ":")
+			if len(ip) == 0 {
+				log.Error("ip不存在3:", storiface.WorkerID(uid))
+				return
+			} else {
+				sect.Ip = ip[0]
+			}
+			sect.Wid = storiface.WorkerID(uid)
+
+			err := m.sched.sectorscalls.PutKey(Number, sect)
+			if err != nil {
+				log.Errorf("记录扇区记录错误2 %s", err)
+			}
+			buf, err := m.sched.sectorscalls.GetByKey(Number)
+			if err != nil {
+				log.Errorf("获取扇区记录错误 %s", err)
+				continue
+			}
+			sect = NewSectorTask(buf)
+			//IP为空，小概率事件
+			if sect.Ip == "" {
+				log.Errorf("未成功记录扇区,即将继续2：", Number, m.sched.workerip[storiface.WorkerID(uid)])
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+			log.Info("记录成功：", sect)
+			break
+		}
+	}()
+	return tc.AddP1count(m.sched.workcalls)
+}
+func (m *Manager) WorkerAddAp(ctx context.Context, Number abi.SectorNumber, uid uuid.UUID) error {
+	tc := record.NewTaskCount(m.sched.workcalls, uid.String())
+	defer tc.FreeTaskMt()
+	go func() {
+		for {
+			var sect SectorTask
+			sect.Sector = Number
+			ip := strings.Split(m.sched.workerip[storiface.WorkerID(uid)], ":")
+			if len(ip) == 0 {
+				log.Error("ip不存在3:", storiface.WorkerID(uid))
+				return
+			} else {
+				sect.Ip = ip[0]
+			}
+			sect.Wid = storiface.WorkerID(uid)
+
+			err := m.sched.sectorscalls.PutKey(Number, sect)
+			if err != nil {
+				log.Errorf("记录扇区记录错误1 %s", err)
+			}
+			buf, err := m.sched.sectorscalls.GetByKey(Number)
+			if err != nil {
+				log.Errorf("获取扇区记录错误 %s", err)
+				continue
+			}
+			sect = NewSectorTask(buf)
+			//IP为空，小概率事件
+			if sect.Ip == "" {
+				log.Errorf("未成功记录扇区,即将继续1：", Number, m.sched.workerip[storiface.WorkerID(uid)])
+				time.Sleep(time.Millisecond * 100)
+				continue
+			}
+			log.Info("记录成功：", sect)
+			break
+		}
+	}()
+	return tc.AddAPcount(m.sched.workcalls)
+}
+func (m *Manager) WorkerDelTaskCount(ctx context.Context, id string) error {
+	tc := record.TaskCount{
+		Wid: id,
+	}
+
+	return tc.DelTaskCount(m.sched.workcalls)
+}
+func (m *Manager) WorkerGetTaskCount(ctx context.Context, id string) (record.TaskCount, error) {
+	at := record.ReadTaskCount(m.sched.workcalls, id)
+	return at, nil
+}
+func (m *Manager) WorkerGetTaskList(ctx context.Context) ([]record.TaskCount, error) {
+	return record.GetTaskList(m.sched.workcalls)
+}
+func (m *Manager) WorkerDelAll(ctx context.Context) error {
+	return m.sched.workcalls.DeleteList()
+}
+
+func (m *Manager) RemoveSchedRequest(ctx context.Context, schedId uuid.UUID) error {
+	return m.sched.RemoveRequest(ctx, schedId)
 }
 
 func (m *Manager) Close(ctx context.Context) error {

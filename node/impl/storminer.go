@@ -9,21 +9,25 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+	//yungojs
+	record "github.com/filecoin-project/lotus/extern/record-task"
 
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 	"github.com/ipfs/go-graphsync"
 	gsimpl "github.com/ipfs/go-graphsync/impl"
 	"github.com/ipfs/go-graphsync/peerstate"
-	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/fx"
 	"golang.org/x/xerrors"
 
 	"github.com/filecoin-project/dagstore"
 	"github.com/filecoin-project/dagstore/shard"
 	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-bitfield"
 	datatransfer "github.com/filecoin-project/go-data-transfer"
 	gst "github.com/filecoin-project/go-data-transfer/transport/graphsync"
 	"github.com/filecoin-project/go-fil-markets/piecestore"
@@ -32,12 +36,15 @@ import (
 	filmktsstore "github.com/filecoin-project/go-fil-markets/stores"
 	"github.com/filecoin-project/go-jsonrpc/auth"
 	"github.com/filecoin-project/go-state-types/abi"
-	minertypes "github.com/filecoin-project/go-state-types/builtin/v8/miner"
+	"github.com/filecoin-project/go-state-types/big"
+	builtintypes "github.com/filecoin-project/go-state-types/builtin"
+	minertypes "github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	"github.com/filecoin-project/go-state-types/network"
 
 	"github.com/filecoin-project/lotus/api"
 	apitypes "github.com/filecoin-project/lotus/api/types"
 	"github.com/filecoin-project/lotus/build"
+	"github.com/filecoin-project/lotus/chain/actors"
 	"github.com/filecoin-project/lotus/chain/actors/builtin"
 	"github.com/filecoin-project/lotus/chain/gen"
 	"github.com/filecoin-project/lotus/chain/types"
@@ -46,7 +53,6 @@ import (
 	"github.com/filecoin-project/lotus/miner"
 	"github.com/filecoin-project/lotus/node/modules"
 	"github.com/filecoin-project/lotus/node/modules/dtypes"
-	"github.com/filecoin-project/lotus/storage"
 	"github.com/filecoin-project/lotus/storage/ctladdr"
 	"github.com/filecoin-project/lotus/storage/paths"
 	sealing "github.com/filecoin-project/lotus/storage/pipeline"
@@ -85,7 +91,7 @@ type StorageMinerAPI struct {
 	DAGStoreWrapper   *mktsdagstore.Wrapper             `optional:"true"`
 
 	// Miner / storage
-	Miner       *storage.Miner       `optional:"true"`
+	Miner       *sealing.Sealing     `optional:"true"`
 	BlockMiner  *miner.Miner         `optional:"true"`
 	StorageMgr  *sealer.Manager      `optional:"true"`
 	IStorageMgr sealer.SectorManager `optional:"true"`
@@ -173,22 +179,27 @@ func (sm *StorageMinerAPI) ActorSectorSize(ctx context.Context, addr address.Add
 	return mi.SectorSize, nil
 }
 
-func (sm *StorageMinerAPI) PledgeSector(ctx context.Context) (abi.SectorID, error) {
-	sr, err := sm.Miner.PledgeSector(ctx)
+//yungojs
+func (sm *StorageMinerAPI) PledgeSector(ctx context.Context, cur uint64) (abi.SectorID, error) {
+	sr, err := sm.Miner.PledgeSector(ctx, cur)
 	if err != nil {
 		return abi.SectorID{}, err
 	}
 
+	return sm.waitSectorStarted(ctx, sr.ID)
+}
+
+func (sm *StorageMinerAPI) waitSectorStarted(ctx context.Context, si abi.SectorID) (abi.SectorID, error) {
 	// wait for the sector to enter the Packing state
 	// TODO: instead of polling implement some pubsub-type thing in storagefsm
 	for {
-		info, err := sm.Miner.SectorsStatus(ctx, sr.ID.Number, false)
+		info, err := sm.Miner.SectorsStatus(ctx, si.Number, false)
 		if err != nil {
 			return abi.SectorID{}, xerrors.Errorf("getting pledged sector info: %w", err)
 		}
 
 		if info.State != api.SectorState(sealing.UndefinedSectorState) {
-			return sr.ID, nil
+			return si, nil
 		}
 
 		select {
@@ -235,6 +246,17 @@ func (sm *StorageMinerAPI) SectorsStatus(ctx context.Context, sid abi.SectorNumb
 
 func (sm *StorageMinerAPI) SectorAddPieceToAny(ctx context.Context, size abi.UnpaddedPieceSize, r storiface.Data, d api.PieceDealInfo) (api.SectorOffset, error) {
 	so, err := sm.Miner.SectorAddPieceToAny(ctx, size, r, d)
+	if err != nil {
+		// jsonrpc doesn't support returning values with errors, make sure we never do that
+		return api.SectorOffset{}, err
+	}
+
+	return so, nil
+}
+
+//yungojs
+func (sm *StorageMinerAPI) SectorAddPieceToAnyRecover(ctx context.Context, size abi.UnpaddedPieceSize, r storiface.Data, d api.PieceDealInfo, sid abi.SectorNumber) (api.SectorOffset, error) {
+	so, err := sm.Miner.SectorAddPieceToAnyRecover(ctx, size, r, d, sid)
 	if err != nil {
 		// jsonrpc doesn't support returning values with errors, make sure we never do that
 		return api.SectorOffset{}, err
@@ -300,12 +322,57 @@ func (sm *StorageMinerAPI) SectorsSummary(ctx context.Context) (map[api.SectorSt
 	}
 
 	out := make(map[api.SectorState]int)
+	//yungojs
+	show := make(map[api.SectorState]string)
 	for i := range sectors {
 		state := api.SectorState(sectors[i].State)
 		out[state]++
+		//yungojs
+		if strings.Contains(string(state), "Proving") || strings.Contains(string(state), "Removed") {
+			continue
+		}
+	}
+	//yungojs
+	for k, v := range show {
+		fmt.Println(k, v)
 	}
 
 	return out, nil
+}
+
+//yungojs
+func (sm *StorageMinerAPI) SchedAlreadyIssueInfo(ctx context.Context) (int64, error) {
+	return sm.StorageMgr.SchedAlreadyIssueInfo(ctx)
+}
+func (sm *StorageMinerAPI) SchedSetAlreadyIssue(ctx context.Context, n int64) error {
+	return sm.StorageMgr.SchedSetAlreadyIssue(ctx, n)
+}
+func (sm *StorageMinerAPI) SchedAddAlreadyIssue(ctx context.Context, n int64) error {
+	return sm.StorageMgr.SchedAddAlreadyIssue(ctx, n)
+}
+func (sm *StorageMinerAPI) SchedSubAlreadyIssue(ctx context.Context, n int64) error {
+	return sm.StorageMgr.SchedSubAlreadyIssue(ctx, n)
+}
+func (sm *StorageMinerAPI) WorkerSetTaskCount(ctx context.Context, tc record.TaskCount) error {
+	return sm.StorageMgr.WorkerSetTaskCount(ctx, tc)
+}
+func (sm *StorageMinerAPI) WorkerAddP1(ctx context.Context, Number abi.SectorNumber, uid uuid.UUID) error {
+	return sm.StorageMgr.WorkerAddP1(ctx, Number, uid)
+}
+func (sm *StorageMinerAPI) WorkerAddAp(ctx context.Context, Number abi.SectorNumber, uid uuid.UUID) error {
+	return sm.StorageMgr.WorkerAddAp(ctx, Number, uid)
+}
+func (sm *StorageMinerAPI) WorkerDelTaskCount(ctx context.Context, id string) error {
+	return sm.StorageMgr.WorkerDelTaskCount(ctx, id)
+}
+func (sm *StorageMinerAPI) WorkerDelAll(ctx context.Context) error {
+	return sm.StorageMgr.WorkerDelAll(ctx)
+}
+func (sm *StorageMinerAPI) WorkerGetTaskCount(ctx context.Context, tc string) (record.TaskCount, error) {
+	return sm.StorageMgr.WorkerGetTaskCount(ctx, tc)
+}
+func (sm *StorageMinerAPI) WorkerGetTaskList(ctx context.Context) ([]record.TaskCount, error) {
+	return sm.StorageMgr.WorkerGetTaskList(ctx)
 }
 
 func (sm *StorageMinerAPI) StorageLocal(ctx context.Context) (map[storiface.ID]string, error) {
@@ -402,7 +469,11 @@ func (sm *StorageMinerAPI) SectorPreCommitPending(ctx context.Context) ([]abi.Se
 }
 
 func (sm *StorageMinerAPI) SectorMarkForUpgrade(ctx context.Context, id abi.SectorNumber, snap bool) error {
-	return sm.Miner.MarkForUpgrade(ctx, id, snap)
+	if !snap {
+		return fmt.Errorf("non-snap upgrades are not supported")
+	}
+
+	return sm.Miner.MarkForUpgrade(ctx, id)
 }
 
 func (sm *StorageMinerAPI) SectorAbortUpgrade(ctx context.Context, number abi.SectorNumber) error {
@@ -419,6 +490,35 @@ func (sm *StorageMinerAPI) SectorCommitPending(ctx context.Context) ([]abi.Secto
 
 func (sm *StorageMinerAPI) SectorMatchPendingPiecesToOpenSectors(ctx context.Context) error {
 	return sm.Miner.SectorMatchPendingPiecesToOpenSectors(ctx)
+}
+
+func (sm *StorageMinerAPI) SectorNumAssignerMeta(ctx context.Context) (api.NumAssignerMeta, error) {
+	return sm.Miner.NumAssignerMeta(ctx)
+}
+
+func (sm *StorageMinerAPI) SectorNumReservations(ctx context.Context) (map[string]bitfield.BitField, error) {
+	return sm.Miner.NumReservations(ctx)
+}
+
+func (sm *StorageMinerAPI) SectorNumReserve(ctx context.Context, name string, field bitfield.BitField, force bool) error {
+	return sm.Miner.NumReserve(ctx, name, field, force)
+}
+
+func (sm *StorageMinerAPI) SectorNumReserveCount(ctx context.Context, name string, count uint64) (bitfield.BitField, error) {
+	return sm.Miner.NumReserveCount(ctx, name, count)
+}
+
+func (sm *StorageMinerAPI) SectorNumFree(ctx context.Context, name string) error {
+	return sm.Miner.NumFree(ctx, name)
+}
+
+func (sm *StorageMinerAPI) SectorReceive(ctx context.Context, meta api.RemoteSectorMeta) error {
+	if err := sm.Miner.Receive(ctx, meta); err != nil {
+		return err
+	}
+
+	_, err := sm.waitSectorStarted(ctx, meta.Sector)
+	return err
 }
 
 func (sm *StorageMinerAPI) ComputeWindowPoSt(ctx context.Context, dlIdx uint64, tsk types.TipSetKey) ([]minertypes.SubmitWindowedPoStParams, error) {
@@ -457,6 +557,10 @@ func (sm *StorageMinerAPI) SealingSchedDiag(ctx context.Context, doSched bool) (
 
 func (sm *StorageMinerAPI) SealingAbort(ctx context.Context, call storiface.CallID) error {
 	return sm.StorageMgr.Abort(ctx, call)
+}
+
+func (sm *StorageMinerAPI) SealingRemoveRequest(ctx context.Context, schedId uuid.UUID) error {
+	return sm.StorageMgr.RemoveSchedRequest(ctx, schedId)
 }
 
 func (sm *StorageMinerAPI) MarketImportDealData(ctx context.Context, propCid cid.Cid, path string) error {
@@ -1206,6 +1310,22 @@ func (sm *StorageMinerAPI) StorageAddLocal(ctx context.Context, path string) err
 	return sm.StorageMgr.AddLocalStorage(ctx, path)
 }
 
+func (sm *StorageMinerAPI) StorageDetachLocal(ctx context.Context, path string) error {
+	if sm.StorageMgr == nil {
+		return xerrors.Errorf("no storage manager")
+	}
+
+	return sm.StorageMgr.DetachLocalStorage(ctx, path)
+}
+
+func (sm *StorageMinerAPI) StorageRedeclareLocal(ctx context.Context, id *storiface.ID, dropMissing bool) error {
+	if sm.StorageMgr == nil {
+		return xerrors.Errorf("no storage manager")
+	}
+
+	return sm.StorageMgr.RedeclareLocalStorage(ctx, id, dropMissing)
+}
+
 func (sm *StorageMinerAPI) PiecesListPieces(ctx context.Context) ([]cid.Cid, error) {
 	return sm.PieceStore.ListPieceInfoKeys()
 }
@@ -1276,6 +1396,82 @@ func (sm *StorageMinerAPI) ComputeProof(ctx context.Context, ssi []builtin.Exten
 	return sm.Epp.ComputeProof(ctx, ssi, rand, poStEpoch, nv)
 }
 
+func (sm *StorageMinerAPI) RecoverFault(ctx context.Context, sectors []abi.SectorNumber) ([]cid.Cid, error) {
+	allsectors, err := sm.Miner.ListSectors()
+	if err != nil {
+		return nil, xerrors.Errorf("could not get a list of all sectors from the miner: %w", err)
+	}
+	var found bool
+	for _, v := range sectors {
+		found = false
+		for _, s := range allsectors {
+			if v == s.SectorNumber {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, xerrors.Errorf("sectors %d not found in the sector list for miner", v)
+		}
+	}
+	return sm.WdPoSt.ManualFaultRecovery(ctx, sm.Miner.Address(), sectors)
+}
+
 func (sm *StorageMinerAPI) RuntimeSubsystems(context.Context) (res api.MinerSubsystems, err error) {
 	return sm.EnabledSubsystems, nil
+}
+
+func (sm *StorageMinerAPI) ActorWithdrawBalance(ctx context.Context, amount abi.TokenAmount) (cid.Cid, error) {
+	return sm.withdrawBalance(ctx, amount, true)
+}
+
+func (sm *StorageMinerAPI) BeneficiaryWithdrawBalance(ctx context.Context, amount abi.TokenAmount) (cid.Cid, error) {
+	return sm.withdrawBalance(ctx, amount, false)
+}
+
+func (sm *StorageMinerAPI) withdrawBalance(ctx context.Context, amount abi.TokenAmount, fromOwner bool) (cid.Cid, error) {
+	available, err := sm.Full.StateMinerAvailableBalance(ctx, sm.Miner.Address(), types.EmptyTSK)
+	if err != nil {
+		return cid.Undef, xerrors.Errorf("Error getting miner balance: %w", err)
+	}
+
+	if amount.GreaterThan(available) {
+		return cid.Undef, xerrors.Errorf("can't withdraw more funds than available; requested: %s; available: %s", types.FIL(amount), types.FIL(available))
+	}
+
+	if amount.Equals(big.Zero()) {
+		amount = available
+	}
+
+	params, err := actors.SerializeParams(&minertypes.WithdrawBalanceParams{
+		AmountRequested: amount,
+	})
+	if err != nil {
+		return cid.Undef, err
+	}
+
+	mi, err := sm.Full.StateMinerInfo(ctx, sm.Miner.Address(), types.EmptyTSK)
+	if err != nil {
+		return cid.Undef, xerrors.Errorf("Error getting miner's owner address: %w", err)
+	}
+
+	var sender address.Address
+	if fromOwner {
+		sender = mi.Owner
+	} else {
+		sender = mi.Beneficiary
+	}
+
+	smsg, err := sm.Full.MpoolPushMessage(ctx, &types.Message{
+		To:     sm.Miner.Address(),
+		From:   sender,
+		Value:  types.NewInt(0),
+		Method: builtintypes.MethodsMiner.WithdrawBalance,
+		Params: params,
+	}, nil)
+	if err != nil {
+		return cid.Undef, err
+	}
+
+	return smsg.Cid(), nil
 }

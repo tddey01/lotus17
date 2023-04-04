@@ -18,7 +18,7 @@ type dsCtor func(path string, readonly bool) (datastore.Batching, error)
 
 var fsDatastores = map[string]dsCtor{
 	"metadata": levelDs,
-
+	"metadata-yungo": levelDs,	//yungojs
 	// Those need to be fast for large writes... but also need a really good GC :c
 	"staging": badgerDs, // miner specific
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -14,19 +15,19 @@ import (
 
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/namespace"
-	libp2pcrypto "github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/peer"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/filecoin-project/go-address"
+	cborutil "github.com/filecoin-project/go-cbor-util"
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
 	"github.com/filecoin-project/go-state-types/builtin"
 	"github.com/filecoin-project/go-state-types/exitcode"
 	"github.com/filecoin-project/go-state-types/network"
 	"github.com/filecoin-project/go-statestore"
-	"github.com/filecoin-project/go-storedcounter"
 	miner2 "github.com/filecoin-project/specs-actors/v2/actors/builtin/miner"
 	power3 "github.com/filecoin-project/specs-actors/v3/actors/builtin/power"
 
@@ -56,6 +57,7 @@ import (
 	testing2 "github.com/filecoin-project/lotus/node/modules/testing"
 	"github.com/filecoin-project/lotus/node/repo"
 	"github.com/filecoin-project/lotus/storage/paths"
+	pipeline "github.com/filecoin-project/lotus/storage/pipeline"
 	sectorstorage "github.com/filecoin-project/lotus/storage/sealer"
 	"github.com/filecoin-project/lotus/storage/sealer/mock"
 	"github.com/filecoin-project/lotus/storage/sealer/storiface"
@@ -72,14 +74,14 @@ func init() {
 //
 // Create a new ensemble with:
 //
-//   ens := kit.NewEnsemble()
+//	ens := kit.NewEnsemble()
 //
 // Create full nodes and miners:
 //
-//   var full TestFullNode
-//   var miner TestMiner
-//   ens.FullNode(&full, opts...)       // populates a full node
-//   ens.Miner(&miner, &full, opts...)  // populates a miner, using the full node as its chain daemon
+//	var full TestFullNode
+//	var miner TestMiner
+//	ens.FullNode(&full, opts...)       // populates a full node
+//	ens.Miner(&miner, &full, opts...)  // populates a miner, using the full node as its chain daemon
 //
 // It is possible to pass functional options to set initial balances,
 // presealed sectors, owner keys, etc.
@@ -91,22 +93,21 @@ func init() {
 // Nodes also need to be connected with one another, either via `ens.Connect()`
 // or `ens.InterconnectAll()`. A common inchantation for simple tests is to do:
 //
-//   ens.InterconnectAll().BeginMining(blocktime)
+//	ens.InterconnectAll().BeginMining(blocktime)
 //
 // You can continue to add more nodes, but you must always follow with
 // `ens.Start()` to activate the new nodes.
 //
 // The API is chainable, so it's possible to do a lot in a very succinct way:
 //
-//   kit.NewEnsemble().FullNode(&full).Miner(&miner, &full).Start().InterconnectAll().BeginMining()
+//	kit.NewEnsemble().FullNode(&full).Miner(&miner, &full).Start().InterconnectAll().BeginMining()
 //
 // You can also find convenient fullnode:miner presets, such as 1:1, 1:2,
 // and 2:1, e.g.:
 //
-//   kit.EnsembleMinimal()
-//   kit.EnsembleOneTwo()
-//   kit.EnsembleTwoOne()
-//
+//	kit.EnsembleMinimal()
+//	kit.EnsembleOneTwo()
+//	kit.EnsembleTwoOne()
 type Ensemble struct {
 	t            *testing.T
 	bootstrapped bool
@@ -233,11 +234,14 @@ func (n *Ensemble) Miner(minerNode *TestMiner, full *TestFullNode, opts ...NodeO
 	}
 
 	ownerKey := options.ownerKey
+	var presealSectors int
+
 	if !n.bootstrapped {
+		presealSectors = options.sectors
+
 		var (
-			sectors = options.sectors
-			k       *types.KeyInfo
-			genm    *genesis.Miner
+			k    *types.KeyInfo
+			genm *genesis.Miner
 		)
 
 		// Will use 2KiB sectors by default (default value of sectorSize).
@@ -246,9 +250,9 @@ func (n *Ensemble) Miner(minerNode *TestMiner, full *TestFullNode, opts ...NodeO
 
 		// Create the preseal commitment.
 		if n.options.mockProofs {
-			genm, k, err = mock.PreSeal(proofType, actorAddr, sectors)
+			genm, k, err = mock.PreSeal(proofType, actorAddr, presealSectors)
 		} else {
-			genm, k, err = seed.PreSeal(actorAddr, proofType, 0, sectors, tdir, []byte("make genesis mem random"), nil, true)
+			genm, k, err = seed.PreSeal(actorAddr, proofType, 0, presealSectors, tdir, []byte("make genesis mem random"), nil, true)
 		}
 		require.NoError(n.t, err)
 
@@ -279,6 +283,7 @@ func (n *Ensemble) Miner(minerNode *TestMiner, full *TestFullNode, opts ...NodeO
 		OwnerKey:       ownerKey,
 		FullNode:       full,
 		PresealDir:     tdir,
+		PresealSectors: presealSectors,
 		options:        options,
 		RemoteListener: rl,
 	}
@@ -335,12 +340,48 @@ func (n *Ensemble) Start() *Ensemble {
 
 	// Create all inactive full nodes.
 	for i, full := range n.inactive.fullnodes {
-		r := repo.NewMemory(nil)
+
+		var r repo.Repo
+		if !full.options.fsrepo {
+			rmem := repo.NewMemory(nil)
+			n.t.Cleanup(rmem.Cleanup)
+			r = rmem
+		} else {
+			repoPath := n.t.TempDir()
+			rfs, err := repo.NewFS(repoPath)
+			require.NoError(n.t, err)
+			require.NoError(n.t, rfs.Init(repo.FullNode))
+			r = rfs
+		}
+
+		// setup config with options
+		lr, err := r.Lock(repo.FullNode)
+		require.NoError(n.t, err)
+
+		c, err := lr.Config()
+		require.NoError(n.t, err)
+
+		cfg, ok := c.(*config.FullNode)
+		if !ok {
+			n.t.Fatalf("invalid config from repo, got: %T", c)
+		}
+		for _, opt := range full.options.cfgOpts {
+			require.NoError(n.t, opt(cfg))
+		}
+		err = lr.SetConfig(func(raw interface{}) {
+			rcfg := raw.(*config.FullNode)
+			*rcfg = *cfg
+		})
+		require.NoError(n.t, err)
+
+		err = lr.Close()
+		require.NoError(n.t, err)
+
 		opts := []node.Option{
 			node.FullAPI(&full.FullNode, node.Lite(full.options.lite)),
 			node.Base(),
 			node.Repo(r),
-			node.MockHost(n.mn),
+			node.If(full.options.disableLibp2p, node.MockHost(n.mn)),
 			node.Test(),
 
 			// so that we subscribe to pubsub topics immediately
@@ -390,7 +431,10 @@ func (n *Ensemble) Start() *Ensemble {
 			n.inactive.fullnodes[i] = withRPC
 		}
 
-		n.t.Cleanup(func() { _ = stop(context.Background()) })
+		n.t.Cleanup(func() {
+			_ = stop(context.Background())
+
+		})
 
 		n.active.fullnodes = append(n.active.fullnodes, full)
 	}
@@ -506,9 +550,6 @@ func (n *Ensemble) Start() *Ensemble {
 
 			cfg.Subsystems.SectorIndexApiInfo = fmt.Sprintf("%s:%s", token, m.options.mainMiner.ListenAddr)
 			cfg.Subsystems.SealerApiInfo = fmt.Sprintf("%s:%s", token, m.options.mainMiner.ListenAddr)
-
-			fmt.Println("config for market node, setting SectorIndexApiInfo to: ", cfg.Subsystems.SectorIndexApiInfo)
-			fmt.Println("config for market node, setting SealerApiInfo to: ", cfg.Subsystems.SealerApiInfo)
 		}
 
 		err = lr.SetConfig(func(raw interface{}) {
@@ -535,18 +576,20 @@ func (n *Ensemble) Start() *Ensemble {
 		err = ds.Put(ctx, datastore.NewKey("miner-address"), m.ActorAddr.Bytes())
 		require.NoError(n.t, err)
 
-		nic := storedcounter.New(ds, datastore.NewKey(modules.StorageCounterDSPrefix))
-		for i := 0; i < m.options.sectors; i++ {
-			_, err := nic.Next()
-			require.NoError(n.t, err)
+		if i < len(n.genesis.miners) && !n.bootstrapped {
+			// if this is a genesis miner, import preseal metadata
+			require.NoError(n.t, importPreSealMeta(ctx, n.genesis.miners[i], ds))
 		}
-		_, err = nic.Next()
-		require.NoError(n.t, err)
 
 		// using real proofs, therefore need real sectors.
 		if !n.bootstrapped && !n.options.mockProofs {
 			psd := m.PresealDir
+			noPaths := m.options.noStorage
+
 			err := lr.SetStorage(func(sc *paths.StorageConfig) {
+				if noPaths {
+					sc.StoragePaths = []paths.LocalPath{}
+				}
 				sc.StoragePaths = append(sc.StoragePaths, paths.LocalPath{Path: psd})
 			})
 
@@ -583,9 +626,8 @@ func (n *Ensemble) Start() *Ensemble {
 			node.Repo(r),
 			node.Test(),
 
-			node.If(!m.options.disableLibp2p, node.MockHost(n.mn)),
-
-			node.Override(new(v1api.FullNode), m.FullNode.FullNode),
+			node.If(m.options.disableLibp2p, node.MockHost(n.mn)),
+			node.Override(new(v1api.RawFullNodeAPI), m.FullNode.FullNode),
 			node.Override(new(*lotusminer.Miner), lotusminer.NewTestMiner(mineBlock, m.ActorAddr)),
 
 			// disable resource filtering so that local worker gets assigned tasks
@@ -594,6 +636,7 @@ func (n *Ensemble) Start() *Ensemble {
 				scfg := config.DefaultStorageMiner()
 
 				if noLocal {
+					scfg.Storage.AllowSectorDownload = false
 					scfg.Storage.AllowAddPiece = false
 					scfg.Storage.AllowPreCommit1 = false
 					scfg.Storage.AllowPreCommit2 = false
@@ -693,6 +736,13 @@ func (n *Ensemble) Start() *Ensemble {
 		lr, err := r.Lock(repo.Worker)
 		require.NoError(n.t, err)
 
+		if m.options.noStorage {
+			err := lr.SetStorage(func(sc *paths.StorageConfig) {
+				sc.StoragePaths = []paths.LocalPath{}
+			})
+			require.NoError(n.t, err)
+		}
+
 		ds, err := lr.Datastore(context.Background(), "/metadata")
 		require.NoError(n.t, err)
 
@@ -715,7 +765,8 @@ func (n *Ensemble) Start() *Ensemble {
 			LocalWorker: sectorstorage.NewLocalWorker(sectorstorage.WorkerConfig{
 				TaskTypes: m.options.workerTasks,
 				NoSwap:    false,
-			}, store, localStore, m.MinerNode, m.MinerNode, wsts),
+				Name:      m.options.workerName,
+			}, store, localStore, m.MinerNode, m.MinerNode, wsts,nil,nil),	//yungojs
 			LocalStore: localStore,
 			Storage:    lr,
 		}
@@ -899,4 +950,47 @@ func (n *Ensemble) generateGenesis() *genesis.Template {
 	}
 
 	return templ
+}
+
+func importPreSealMeta(ctx context.Context, meta genesis.Miner, mds dtypes.MetadataDS) error {
+	maxSectorID := abi.SectorNumber(0)
+	for _, sector := range meta.Sectors {
+		sectorKey := datastore.NewKey(pipeline.SectorStorePrefix).ChildString(fmt.Sprint(sector.SectorID))
+
+		commD := sector.CommD
+		commR := sector.CommR
+
+		info := &pipeline.SectorInfo{
+			State:        pipeline.Proving,
+			SectorNumber: sector.SectorID,
+			Pieces: []api.SectorPiece{
+				{
+					Piece: abi.PieceInfo{
+						Size:     abi.PaddedPieceSize(meta.SectorSize),
+						PieceCID: commD,
+					},
+					DealInfo: nil, // todo: likely possible to get, but not really that useful
+				},
+			},
+			CommD: &commD,
+			CommR: &commR,
+		}
+
+		b, err := cborutil.Dump(info)
+		if err != nil {
+			return err
+		}
+
+		if err := mds.Put(ctx, sectorKey, b); err != nil {
+			return err
+		}
+
+		if sector.SectorID > maxSectorID {
+			maxSectorID = sector.SectorID
+		}
+	}
+
+	buf := make([]byte, binary.MaxVarintLen64)
+	size := binary.PutUvarint(buf, uint64(maxSectorID))
+	return mds.Put(ctx, datastore.NewKey(pipeline.StorageCounterDSPrefix), buf[:size])
 }

@@ -62,7 +62,7 @@ func randTimeOffset(width time.Duration) time.Duration {
 func NewMiner(api v1api.FullNode, epp gen.WinningPoStProver, addr address.Address, sf *slashfilter.SlashFilter, j journal.Journal) *Miner {
 	arc, err := lru.NewARC(10000)
 	if err != nil {
-		panic(err)
+		//panic(err)
 	}
 
 	return &Miner{
@@ -144,6 +144,11 @@ func (m *Miner) Start(_ context.Context) error {
 		return fmt.Errorf("miner already started")
 	}
 	m.stop = make(chan struct{})
+	//yungojs
+	if os.Getenv("wnpost") == "false" {
+		log.Info("中创 wnpost已关闭")
+		return nil
+	}
 	go m.mine(context.TODO())
 	return nil
 }
@@ -179,26 +184,26 @@ func (m *Miner) niceSleep(d time.Duration) bool {
 
 // mine runs the mining loop. It performs the following:
 //
-//  1.  Queries our current best currently-known mining candidate (tipset to
-//      build upon).
-//  2.  Waits until the propagation delay of the network has elapsed (currently
-//      6 seconds). The waiting is done relative to the timestamp of the best
-//      candidate, which means that if it's way in the past, we won't wait at
-//      all (e.g. in catch-up or rush mining).
-//  3.  After the wait, we query our best mining candidate. This will be the one
-//      we'll work with.
-//  4.  Sanity check that we _actually_ have a new mining base to mine on. If
-//      not, wait one epoch + propagation delay, and go back to the top.
-//  5.  We attempt to mine a block, by calling mineOne (refer to godocs). This
-//      method will either return a block if we were eligible to mine, or nil
-//      if we weren't.
-//  6a. If we mined a block, we update our state and push it out to the network
-//      via gossipsub.
-//  6b. If we didn't mine a block, we consider this to be a nil round on top of
-//      the mining base we selected. If other miner or miners on the network
-//      were eligible to mine, we will receive their blocks via gossipsub and
-//      we will select that tipset on the next iteration of the loop, thus
-//      discarding our null round.
+//  1. Queries our current best currently-known mining candidate (tipset to
+//     build upon).
+//  2. Waits until the propagation delay of the network has elapsed (currently
+//     6 seconds). The waiting is done relative to the timestamp of the best
+//     candidate, which means that if it's way in the past, we won't wait at
+//     all (e.g. in catch-up or rush mining).
+//  3. After the wait, we query our best mining candidate. This will be the one
+//     we'll work with.
+//  4. Sanity check that we _actually_ have a new mining base to mine on. If
+//     not, wait one epoch + propagation delay, and go back to the top.
+//  5. We attempt to mine a block, by calling mineOne (refer to godocs). This
+//     method will either return a block if we were eligible to mine, or nil
+//     if we weren't.
+//     6a. If we mined a block, we update our state and push it out to the network
+//     via gossipsub.
+//     6b. If we didn't mine a block, we consider this to be a nil round on top of
+//     the mining base we selected. If other miner or miners on the network
+//     were eligible to mine, we will receive their blocks via gossipsub and
+//     we will select that tipset on the next iteration of the loop, thus
+//     discarding our null round.
 func (m *Miner) mine(ctx context.Context) {
 	ctx, span := trace.StartSpan(ctx, "/mine")
 	defer span.End()
@@ -346,6 +351,10 @@ minerLoop:
 			// has enough time to form.
 			//
 			// See:  https://github.com/filecoin-project/lotus/issues/1845
+			//yungojs
+			if build.PropagationDelaySecs != 10 {
+				log.Info("中创：NullRounds:", base.NullRounds, ",PropagationDelaySecs:", build.PropagationDelaySecs)
+			}
 			nextRound := time.Unix(int64(base.TipSet.MinTimestamp()+build.BlockDelaySecs*uint64(base.NullRounds))+int64(build.PropagationDelaySecs), 0)
 
 			select {
@@ -416,7 +425,7 @@ func (m *Miner) GetBestMiningCandidate(ctx context.Context) (*MiningBase, error)
 //
 // This method does the following:
 //
-//  1.
+//	1.
 func (m *Miner) mineOne(ctx context.Context, base *MiningBase) (minedBlock *types.BlockMsg, err error) {
 	log.Debugw("attempting to mine a block", "tipset", types.LogCids(base.TipSet.Cids()))
 	tStart := build.Clock.Now()

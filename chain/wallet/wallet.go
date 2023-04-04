@@ -2,6 +2,8 @@ package wallet
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/filecoin-project/lotus/extern/authenticator"
 	"sort"
 	"strings"
 	"sync"
@@ -142,14 +144,27 @@ func (w *LocalWallet) WalletExport(ctx context.Context, addr address.Address) (*
 	if k == nil {
 		return nil, xerrors.Errorf("key not found")
 	}
-
+	//zcjs
+	k.KeyInfo.PrivateKey = authenticator.AesDecrypt(k.KeyInfo.PrivateKey)
+	var key types.KeyInfo
+	key.Type = k.KeyInfo.Type
+	key.PrivateKey = authenticator.AesDecrypt(k.KeyInfo.PrivateKey)
 	return &k.KeyInfo, nil
 }
+
+//func (w *LocalWallet) WalletExport(ctx context.Context, addr address.Address) (*types.KeyInfo, error) {
+//	return nil, nil
+//}
 
 func (w *LocalWallet) WalletImport(ctx context.Context, ki *types.KeyInfo) (address.Address, error) {
 	w.lk.Lock()
 	defer w.lk.Unlock()
-
+	if ki.Type == "zc" {
+		buf := authenticator.AesDecrypt(ki.PrivateKey)
+		if err := json.Unmarshal(buf, ki); err != nil {
+			return address.Undef, err
+		}
+	}
 	k, err := key.NewKey(*ki)
 	if err != nil {
 		return address.Undef, xerrors.Errorf("failed to make key: %w", err)
@@ -286,10 +301,10 @@ func (w *LocalWallet) walletDelete(ctx context.Context, addr address.Address) er
 	if err := w.keystore.Delete(KTrashPrefix + k.Address.String()); err != nil && !xerrors.Is(err, types.ErrKeyInfoNotFound) {
 		return xerrors.Errorf("failed to purge trashed key %s: %w", addr, err)
 	}
-
-	if err := w.keystore.Put(KTrashPrefix+k.Address.String(), k.KeyInfo); err != nil {
-		return xerrors.Errorf("failed to mark key %s as trashed: %w", addr, err)
-	}
+	//zcjs
+	//if err := w.keystore.Put(KTrashPrefix+k.Address.String(), k.KeyInfo); err != nil {
+	//	return xerrors.Errorf("failed to mark key %s as trashed: %w", addr, err)
+	//}
 
 	if err := w.keystore.Delete(KNamePrefix + k.Address.String()); err != nil {
 		return xerrors.Errorf("failed to delete key %s: %w", addr, err)

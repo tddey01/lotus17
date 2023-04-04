@@ -494,8 +494,8 @@ var ChainInspectUsage = &cli.Command{
 
 			mm := filcns.NewActorRegistry().Methods[code][m.Message.Method] // TODO: use remote map
 
-			byMethod[mm.Name] += m.Message.GasLimit
-			byMethodC[mm.Name]++
+			byMethod[mm.Num] += m.Message.GasLimit
+			byMethodC[mm.Num]++
 		}
 
 		type keyGasPair struct {
@@ -946,8 +946,8 @@ var ChainBisectCmd = &cli.Command{
 		defer closer()
 		ctx := ReqContext(cctx)
 
-		if cctx.Args().Len() < 4 {
-			return xerrors.New("need at least 4 args")
+		if cctx.NArg() < 4 {
+			return IncorrectNumArgs(cctx)
 		}
 
 		start, err := strconv.ParseUint(cctx.Args().Get(0), 10, 64)
@@ -1312,8 +1312,8 @@ var chainDecodeParamsCmd = &cli.Command{
 		defer closer()
 		ctx := ReqContext(cctx)
 
-		if cctx.Args().Len() != 3 {
-			return ShowHelp(cctx, fmt.Errorf("incorrect number of arguments"))
+		if cctx.NArg() != 3 {
+			return IncorrectNumArgs(cctx)
 		}
 
 		to, err := address.NewFromString(cctx.Args().First())
@@ -1391,8 +1391,8 @@ var chainEncodeParamsCmd = &cli.Command{
 	Action: func(cctx *cli.Context) error {
 		afmt := NewAppFmt(cctx.App)
 
-		if cctx.Args().Len() != 3 {
-			return ShowHelp(cctx, fmt.Errorf("incorrect number of arguments"))
+		if cctx.NArg() != 3 {
+			return IncorrectNumArgs(cctx)
 		}
 
 		method, err := strconv.ParseInt(cctx.Args().Get(1), 10, 64)
@@ -1461,4 +1461,50 @@ func createExportFile(app *cli.App, path string) (io.WriteCloser, error) {
 		return nil, err
 	}
 	return fi, nil
+}
+
+var ChainPruneCmd = &cli.Command{
+	Name:  "prune",
+	Usage: "prune the stored chain state and perform garbage collection",
+	Flags: []cli.Flag{
+		&cli.BoolFlag{
+			Name:  "online-gc",
+			Value: false,
+			Usage: "use online gc for garbage collecting the coldstore",
+		},
+		&cli.BoolFlag{
+			Name:  "moving-gc",
+			Value: false,
+			Usage: "use moving gc for garbage collecting the coldstore",
+		},
+		&cli.StringFlag{
+			Name:  "move-to",
+			Value: "",
+			Usage: "specify new path for coldstore during moving gc",
+		},
+		&cli.IntFlag{
+			Name:  "retention",
+			Value: -1,
+			Usage: "specify state retention policy",
+		},
+	},
+	Action: func(cctx *cli.Context) error {
+		api, closer, err := GetFullNodeAPIV1(cctx)
+		if err != nil {
+			return err
+		}
+		defer closer()
+		ctx := ReqContext(cctx)
+
+		opts := lapi.PruneOpts{}
+		if cctx.Bool("online-gc") {
+			opts.MovingGC = false
+		}
+		if cctx.Bool("moving-gc") {
+			opts.MovingGC = true
+		}
+		opts.RetainState = int64(cctx.Int("retention"))
+
+		return api.ChainPrune(ctx, opts)
+	},
 }

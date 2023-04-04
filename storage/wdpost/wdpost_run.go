@@ -5,6 +5,13 @@ import (
 	"context"
 	"time"
 
+	//yungojs
+	record "github.com/filecoin-project/lotus/extern/record-task"
+	"github.com/filecoin-project/lotus/storage/sealer"
+	"os"
+	"strconv"
+	"strings"
+
 	"github.com/ipfs/go-cid"
 	"go.opencensus.io/trace"
 	"golang.org/x/xerrors"
@@ -14,7 +21,7 @@ import (
 	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/big"
 	"github.com/filecoin-project/go-state-types/builtin"
-	"github.com/filecoin-project/go-state-types/builtin/v8/miner"
+	"github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	"github.com/filecoin-project/go-state-types/crypto"
 	"github.com/filecoin-project/go-state-types/dline"
 	"github.com/filecoin-project/go-state-types/network"
@@ -253,6 +260,12 @@ func (s *WindowPoStScheduler) runPoStCycle(ctx context.Context, manual bool, di 
 	ctx, span := trace.StartSpan(ctx, "storage.runPoStCycle")
 	defer span.End()
 
+	log.Info("wdpost：", di)
+	//yungojs
+	start := time.Now()
+	flag := false
+	addsector := false
+
 	if !manual {
 		// TODO: extract from runPoStCycle, run on fault cutoff boundaries
 		s.asyncFaultRecover(di, ts)
@@ -314,12 +327,89 @@ func (s *WindowPoStScheduler) runPoStCycle(ctx context.Context, manual bool, di 
 		postSkipped := bitfield.New()
 		somethingToProve := false
 
+		stk := os.Getenv("PARTITIONS") //"1,2,3,4"  yungojs
+		Str := strings.Split(stk, ",")
+		var nums []int
+		for _, v := range Str {
+			t, err := strconv.Atoi(v)
+			if err != nil {
+				continue
+			}
+			nums = append(nums, t)
+		}
+
 		// Retry until we run out of sectors to prove.
 		for retries := 0; ; retries++ {
 			skipCount := uint64(0)
 			var partitions []miner.PoStPartition
 			var xsinfos []proof7.ExtendedSectorInfo
 			for partIdx, partition := range batch {
+				//yungojs
+				if len(nums) > 0 {
+					find := false
+					log.Infof("parititons +++++++++++++YUNGO+++++++++++++++%d", nums)
+					for _, i := range nums {
+						if partIdx == i {
+							log.Infof("start wdpost for partition %d", i)
+							find = true
+							break
+						}
+					}
+					if !find {
+						log.Infof("partition %d not config for this miner. config %v", partIdx, nums)
+						continue
+					}
+				}
+				if !addsector && partIdx == len(batch)-1 && os.Getenv("PLEDGE_MINER") != "true" {
+					live, err1 := partition.LiveSectors.Count()
+					if err1 != nil {
+						log.Error("获取LiveSectors错误：", err1.Error())
+					}
+					active, err2 := partition.ActiveSectors.Count()
+					if err2 != nil {
+						log.Error("获取ActiveSectors错误：", err2.Error())
+					}
+					recovering, err3 := partition.RecoveringSectors.Count()
+					if err3 != nil {
+						log.Error("获取ActiveSectors错误：", err3.Error())
+					}
+					if live > active+recovering {
+						strpath := os.Getenv("LOTUS_MINER_PATH")
+						if strpath == "" {
+							strpath = os.Getenv("LOTUS_STORAGE_PATH")
+						}
+						if os.Getenv("wdtype") == "worker" {
+							strpath = os.Getenv("WORKER_PATH")
+						}
+						err = s.faultTracker.(*sealer.Manager).ReacquireSectors(ctx, strpath)
+						if err != nil {
+							log.Info("重新获取扇区失败！", err)
+						} else {
+							addsector = true
+							log.Info("重新获取扇区成功！", partIdx)
+						}
+					}
+				}
+				//yungojs
+				conf := sealer.GetPledgeConfig()
+				log.Info("开始checkSectors,休眠转移时间 :", conf.FinSleepMinute)
+				if conf.FinSleepMinute > 0 {
+					go func() {
+						if retries == 0 {
+							now := time.Now()
+							for {
+								record.FINsuspend = true
+								if now.Add(time.Minute * time.Duration(conf.FinSleepMinute)).Before(time.Now()) {
+									record.FINsuspend = false
+									break
+								}
+								time.Sleep(time.Second)
+							}
+
+						}
+					}()
+				}
+
 				// TODO: Can do this in parallel
 				toProve, err := bitfield.SubtractBitField(partition.LiveSectors, partition.FaultySectors)
 				if err != nil {
@@ -400,6 +490,10 @@ func (s *WindowPoStScheduler) runPoStCycle(ctx context.Context, manual bool, di 
 
 			postOut, ps, err := s.prover.GenerateWindowPoSt(ctx, abi.ActorID(mid), xsinfos, append(abi.PoStRandomness{}, rand...))
 			elapsed := time.Since(tsStart)
+
+			//yungojs
+			flag = true
+
 			log.Infow("computing window post", "batch", batchIdx, "elapsed", elapsed, "skip", len(ps), "err", err)
 			if err != nil {
 				log.Errorf("error generating window post: %s", err)
@@ -488,6 +582,27 @@ func (s *WindowPoStScheduler) runPoStCycle(ctx context.Context, manual bool, di 
 			continue
 		}
 		posts = append(posts, params)
+	}
+	//yungojs
+	t := time.Since(start)
+	log.Info("计算耗时:", t.Minutes(), flag)
+	str := os.Getenv("wdtime")
+	wdtime := 0
+	if str != "" {
+		wdtime, _ = strconv.Atoi(str)
+		log.Info("中创 wdtime：", wdtime)
+	}
+	if flag {
+		num := 0
+		for num < 15 {
+			time.Sleep(time.Second * 60)
+			t = time.Since(start)
+			log.Info("总耗时:", t.Minutes())
+			if t.Minutes() > float64(wdtime) {
+				break
+			}
+			num++
+		}
 	}
 	return posts, nil
 }
@@ -716,4 +831,8 @@ func (s *WindowPoStScheduler) ComputePoSt(ctx context.Context, dlIdx uint64, ts 
 	dl.Challenge += epochDiff
 
 	return s.runPoStCycle(ctx, true, *dl, ts)
+}
+
+func (s *WindowPoStScheduler) ManualFaultRecovery(ctx context.Context, maddr address.Address, sectors []abi.SectorNumber) ([]cid.Cid, error) {
+	return s.declareManualRecoveries(ctx, maddr, sectors, types.TipSetKey{})
 }

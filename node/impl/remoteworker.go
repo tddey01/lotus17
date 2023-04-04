@@ -2,7 +2,9 @@ package impl
 
 import (
 	"context"
+	"github.com/filecoin-project/lotus/storage/sealer/sealtasks"
 	"net/http"
+	"strings"
 
 	"golang.org/x/xerrors"
 
@@ -47,8 +49,29 @@ func connectRemoteWorker(ctx context.Context, fa api.Common, url string) (*remot
 	if !wver.EqMajorMinor(api.WorkerAPIVersion0) {
 		return nil, xerrors.Errorf("unsupported worker api version: %s (expected %s)", wver, api.WorkerAPIVersion0)
 	}
-
-	return &remoteWorker{wapi, closer}, nil
+	//yungojs
+	ip := strings.Split(url, "/")[2]
+	wc := sealer.WConfig{
+		ip,
+		0,
+	}
+	//conf := sectorstorage.GetPledgeConfig()
+	types,err := wapi.TaskTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _,ok := types[sealtasks.TTPreCommit1];ok{
+		wc.P1count = 7
+	}
+	conf := sealer.GetPledgeConfig()
+	for _, v := range conf.WorkerConfigs {
+		if v.Ip == ip {
+			return &remoteWorker{wapi, closer}, nil
+		}
+	}
+	conf.WorkerConfigs = append(conf.WorkerConfigs, wc)
+	//yungojs
+	return &remoteWorker{wapi, closer}, conf.SaveConfigFile()
 }
 
 func (r *remoteWorker) Close() error {

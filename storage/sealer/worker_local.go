@@ -10,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	//yungojs
+	"github.com/filecoin-project/lotus/api"
+	"strconv"
 
 	"github.com/elastic/go-sysinfo"
 	"github.com/google/uuid"
@@ -34,6 +37,9 @@ type WorkerConfig struct {
 	TaskTypes []sealtasks.TaskType
 	NoSwap    bool
 
+	// os.Hostname if not set
+	Name string
+
 	// IgnoreResourceFiltering enables task distribution to happen on this
 	// worker regardless of its currently available resources. Used in testing
 	// with the local worker.
@@ -51,10 +57,13 @@ type LocalWorker struct {
 	storage    paths.Store
 	localStore *paths.Local
 	sindex     paths.SectorIndex
+	miner      api.StorageMiner //yungojs
 	ret        storiface.WorkerReturn
 	executor   ExecutorFunc
 	noSwap     bool
 	envLookup  EnvFunc
+
+	name string
 
 	// see equivalent field on WorkerConfig.
 	ignoreResources bool
@@ -72,7 +81,34 @@ type LocalWorker struct {
 	closing     chan struct{}
 }
 
-func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc, store paths.Store, local *paths.Local, sindex paths.SectorIndex, ret storiface.WorkerReturn, cst *statestore.StateStore) *LocalWorker {
+//yungojs
+func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc, store paths.Store, local *paths.Local, sindex paths.SectorIndex, ret storiface.WorkerReturn, cst *statestore.StateStore, widp *statestore.StateStore, nodeApi api.StorageMiner) *LocalWorker {
+	//yungojs
+	var workerid uuid.UUID
+	wkey := WorkerIdKey{"/workerid"}
+
+	ok, err := widp.Has(wkey)
+	if err != nil {
+		log.Fatal("获取workerid失败！has:", err.Error())
+	}
+	if ok {
+		wb, err := widp.GetByKey(wkey)
+		if err != nil {
+			log.Fatal("获取workerid失败！GetByKey:", err.Error())
+		}
+		workerid, err = uuid.FromBytes(wb)
+	} else {
+		workerid = uuid.New()
+		wb, err := workerid.MarshalBinary()
+		if err != nil {
+			log.Fatal("保存workerid失败！MarshalBinary:", err.Error())
+		}
+		if err = widp.PutBytes(wkey, wb); err != nil {
+			log.Fatal("保存workerid失败！PutKey:", err.Error())
+		}
+	}
+	log.Info("中创workerid：", workerid)
+
 	acceptTasks := map[sealtasks.TaskType]struct{}{}
 	for _, taskType := range wcfg.TaskTypes {
 		acceptTasks[taskType] = struct{}{}
@@ -83,7 +119,8 @@ func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc,
 		localStore: local,
 		sindex:     sindex,
 		ret:        ret,
-
+		name:       wcfg.Name,
+		miner:      nodeApi, //yungojs
 		ct: &workerCallTracker{
 			st: cst,
 		},
@@ -93,8 +130,16 @@ func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc,
 		envLookup:            envLookup,
 		ignoreResources:      wcfg.IgnoreResourceFiltering,
 		challengeReadTimeout: wcfg.ChallengeReadTimeout,
-		session:              uuid.New(),
+		session:              workerid, //yungojs
 		closing:              make(chan struct{}),
+	}
+
+	if w.name == "" {
+		var err error
+		w.name, err = os.Hostname()
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	if wcfg.MaxParallelChallengeReads > 0 {
@@ -113,13 +158,7 @@ func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc,
 
 	go func() {
 		for _, call := range unfinished {
-			hostname, osErr := os.Hostname()
-			if osErr != nil {
-				log.Errorf("get hostname err: %+v", err)
-				hostname = ""
-			}
-
-			err := storiface.Err(storiface.ErrTempWorkerRestart, xerrors.Errorf("worker [Hostname: %s] restarted", hostname))
+			err := storiface.Err(storiface.ErrTempWorkerRestart, xerrors.Errorf("worker [name: %s] restarted", w.name))
 
 			// TODO: Handle restarting PC1 once support is merged
 
@@ -128,14 +167,30 @@ func newLocalWorker(executor ExecutorFunc, wcfg WorkerConfig, envLookup EnvFunc,
 					log.Errorf("marking call as returned failed: %s: %+v", call.RetType, err)
 				}
 			}
+			//yungojs
+			if call.RetType == AddPiece {
+				//if err := w.ct.onReturned(call.ID);err!=nil{
+				//	log.Errorf("marking call as returned failed1: %s: %+v", call.RetType, err)
+				//}
+				if err := nodeApi.SectorRemove(context.TODO(), call.ID.Sector.Number); err != nil {
+					log.Errorf("移除ap报错：%+v,%d", err, call.ID.Sector.Number)
+				}
+				if err := nodeApi.SchedSubAlreadyIssue(context.TODO(), 1); err != nil {
+					log.Errorf("总任务数减少失败：%+v,%d", err, call.ID.Sector.Number)
+				}
+				//continue
+			}
 		}
 	}()
 
 	return w
 }
 
-func NewLocalWorker(wcfg WorkerConfig, store paths.Store, local *paths.Local, sindex paths.SectorIndex, ret storiface.WorkerReturn, cst *statestore.StateStore) *LocalWorker {
-	return newLocalWorker(nil, wcfg, os.LookupEnv, store, local, sindex, ret, cst)
+//yungojs
+var WorkerIp string
+
+func NewLocalWorker(wcfg WorkerConfig, store paths.Store, local *paths.Local, sindex paths.SectorIndex, ret storiface.WorkerReturn, cst *statestore.StateStore, widp *statestore.StateStore, miner api.StorageMiner) *LocalWorker {
+	return newLocalWorker(nil, wcfg, os.LookupEnv, store, local, sindex, ret, cst, widp, miner)
 }
 
 type localWorkerPathProvider struct {
@@ -194,8 +249,23 @@ const (
 	ReleaseUnsealed       ReturnType = "ReleaseUnsealed"
 	MoveStorage           ReturnType = "MoveStorage"
 	UnsealPiece           ReturnType = "UnsealPiece"
+	DownloadSector        ReturnType = "DownloadSector"
 	Fetch                 ReturnType = "Fetch"
 )
+
+//yungojs
+var Rt_TT = map[ReturnType]sealtasks.TaskType{
+	AddPiece:        sealtasks.TTAddPiece,
+	SealPreCommit1:  sealtasks.TTPreCommit1,
+	SealPreCommit2:  sealtasks.TTPreCommit2,
+	SealCommit1:     sealtasks.TTCommit1,
+	SealCommit2:     sealtasks.TTCommit2,
+	FinalizeSector:  sealtasks.TTFinalize,
+	ReleaseUnsealed: sealtasks.TTUnseal,
+	MoveStorage:     sealtasks.TTFinalize,
+	UnsealPiece:     sealtasks.TTUnseal,
+	Fetch:           sealtasks.TTFetch,
+}
 
 // in: func(WorkerReturn, context.Context, CallID, err string)
 // in: func(WorkerReturn, context.Context, CallID, ret T, err string)
@@ -247,6 +317,7 @@ var returnFunc = map[ReturnType]func(context.Context, storiface.CallID, storifac
 	FinalizeReplicaUpdate: rfunc(storiface.WorkerReturn.ReturnFinalizeReplicaUpdate),
 	MoveStorage:           rfunc(storiface.WorkerReturn.ReturnMoveStorage),
 	UnsealPiece:           rfunc(storiface.WorkerReturn.ReturnUnsealPiece),
+	DownloadSector:        rfunc(storiface.WorkerReturn.ReturnDownloadSector),
 	Fetch:                 rfunc(storiface.WorkerReturn.ReturnFetch),
 }
 
@@ -283,12 +354,7 @@ func (l *LocalWorker) asyncCall(ctx context.Context, sector storiface.SectorRef,
 		}
 
 		if err != nil {
-			hostname, osErr := os.Hostname()
-			if osErr != nil {
-				log.Errorf("get hostname err: %+v", err)
-			}
-
-			err = xerrors.Errorf("%w [Hostname: %s]", err, hostname)
+			err = xerrors.Errorf("%w [name: %s]", err, l.name)
 		}
 
 		if doReturn(ctx, rt, ci, l.ret, res, toCallError(err)) {
@@ -312,6 +378,9 @@ func toCallError(err error) *storiface.CallError {
 // doReturn tries to send the result to manager, returns true if successful
 func doReturn(ctx context.Context, rt ReturnType, ci storiface.CallID, ret storiface.WorkerReturn, res interface{}, rerr *storiface.CallError) bool {
 	for {
+		//yungojs
+		ci.TT = Rt_TT[rt]
+
 		err := returnFunc[rt](ctx, ci, ret, res, rerr)
 		if err == nil {
 			break
@@ -360,6 +429,17 @@ func (l *LocalWorker) AddPiece(ctx context.Context, sector storiface.SectorRef, 
 	}
 
 	return l.asyncCall(ctx, sector, AddPiece, func(ctx context.Context, ci storiface.CallID) (interface{}, error) {
+		//yungojs
+		go func() {
+			for {
+				log.Info("返回扇区记录：", sector.ID.Number, l.session)
+				if err := l.miner.WorkerAddAp(ctx, sector.ID.Number, l.session); err != nil {
+					log.Error("修改任务数失败！", err.Error())
+					continue
+				}
+				break
+			}
+		}()
 		return sb.AddPiece(ctx, sector, epcs, sz, r)
 	})
 }
@@ -393,7 +473,21 @@ func (l *LocalWorker) SealPreCommit1(ctx context.Context, sector storiface.Secto
 		if err != nil {
 			return nil, err
 		}
-
+		//yungojs
+		go func() {
+			for {
+				if err := l.miner.WorkerAddP1(ctx, sector.ID.Number, l.session); err != nil {
+					log.Error("修改任务数失败！", err.Error())
+					continue
+				}
+				break
+			}
+		}()
+		start := time.Now()
+		defer func() {
+			t := time.Since(start)
+			log.Info("中创P1耗时：", t)
+		}()
 		return sb.SealPreCommit1(ctx, sector, ticket, pieces)
 	})
 }
@@ -484,16 +578,28 @@ func (l *LocalWorker) FinalizeSector(ctx context.Context, sector storiface.Secto
 
 	return l.asyncCall(ctx, sector, FinalizeSector, func(ctx context.Context, ci storiface.CallID) (interface{}, error) {
 		if err := sb.FinalizeSector(ctx, sector, keepUnsealed); err != nil {
+			//yungojs
+			si, err1 := l.sindex.StorageFindSector(ctx, sector.ID, storiface.FTSealed, 0, false)
+			if err1 != nil {
+				log.Warn("中创FinalizeSector：", err1)
+			}
+			for _, v := range si {
+				if v.CanStore {
+					log.Info("已存在存储：", v.ID, ",", v.URLs)
+					return nil, nil
+				}
+			}
 			return nil, xerrors.Errorf("finalizing sector: %w", err)
 		}
 
 		if len(keepUnsealed) == 0 {
 			if err := l.storage.Remove(ctx, sector.ID, storiface.FTUnsealed, true, nil); err != nil {
-				return nil, xerrors.Errorf("removing unsealed data: %w", err)
+				//yungojs
+				//return nil, xerrors.Errorf("removing unsealed data: %w", err)
 			}
 		}
-
-		return nil, err
+		//yungojs
+		return nil, nil
 	})
 }
 
@@ -540,6 +646,17 @@ func (l *LocalWorker) Remove(ctx context.Context, sector abi.SectorID) error {
 
 func (l *LocalWorker) MoveStorage(ctx context.Context, sector storiface.SectorRef, types storiface.SectorFileType) (storiface.CallID, error) {
 	return l.asyncCall(ctx, sector, MoveStorage, func(ctx context.Context, ci storiface.CallID) (interface{}, error) {
+		//yungojs
+		si, err1 := l.sindex.StorageFindSector(ctx, sector.ID, storiface.FTSealed, 0, false)
+		if err1 != nil {
+			log.Warn("中创MoveStorage：", err1)
+		}
+		for _, v := range si {
+			if v.CanStore {
+				return nil, nil
+			}
+		}
+
 		if err := l.storage.MoveStorage(ctx, sector, types); err != nil {
 			return nil, xerrors.Errorf("move to storage: %w", err)
 		}
@@ -580,6 +697,17 @@ func (l *LocalWorker) UnsealPiece(ctx context.Context, sector storiface.SectorRe
 		log.Debugf("worker has unsealed piece, sector=%+v", sector.ID)
 
 		return nil, nil
+	})
+}
+
+func (l *LocalWorker) DownloadSectorData(ctx context.Context, sector storiface.SectorRef, finalized bool, src map[storiface.SectorFileType]storiface.SectorLocation) (storiface.CallID, error) {
+	sb, err := l.executor()
+	if err != nil {
+		return storiface.UndefCall, err
+	}
+
+	return l.asyncCall(ctx, sector, DownloadSector, func(ctx context.Context, ci storiface.CallID) (interface{}, error) {
+		return nil, sb.DownloadSectorData(ctx, sector, finalized, src)
 	})
 }
 
@@ -774,14 +902,27 @@ func (l *LocalWorker) memInfo() (memPhysical, memUsed, memSwap, memSwapUsed uint
 }
 
 func (l *LocalWorker) Info(context.Context) (storiface.WorkerInfo, error) {
-	hostname, err := os.Hostname() // TODO: allow overriding from config
-	if err != nil {
-		panic(err)
-	}
-
-	gpus, err := ffi.GetGPUDevices()
-	if err != nil {
-		log.Errorf("getting gpu devices failed: %+v", err)
+	//yungojs
+	//gpus, err := ffi.GetGPUDevices()
+	//if err != nil {
+	//	log.Errorf("getting gpu devices failed: %+v", err)
+	//}
+	var err error
+	var gpus []string
+	count := 1
+	if os.Getenv("C2_MANAGE") == "true" {
+		count, _ = strconv.Atoi(os.Getenv("GPU_COUNT"))
+		if count == 0 {
+			count = 100
+		}
+		for i := 0; i < count; i++ {
+			gpus = append(gpus, strconv.Itoa(i))
+		}
+	} else {
+		gpus, err = ffi.GetGPUDevices()
+		if err != nil {
+			log.Errorf("getting gpu devices failed: %+v", err)
+		}
 	}
 
 	memPhysical, memUsed, memSwap, memSwapUsed, err := l.memInfo()
@@ -795,9 +936,29 @@ func (l *LocalWorker) Info(context.Context) (storiface.WorkerInfo, error) {
 	if err != nil {
 		return storiface.WorkerInfo{}, xerrors.Errorf("interpreting resource env vars: %w", err)
 	}
+	//yungojs
+	if os.Getenv("C2_MANAGE") == "true" {
+		return storiface.WorkerInfo{
+			Hostname:        l.name,
+			Ip:              WorkerIp,
+			Wid:             l.session,
+			IgnoreResources: l.ignoreResources,
+			Resources: storiface.WorkerResources{
+				MemPhysical: 1024 * 1024 * 1024 * 1024 * 1024 * 1024,
+				MemUsed:     0,
+				MemSwap:     1024 * 1024 * 1024 * 1024 * 1024 * 1024,
+				MemSwapUsed: 0,
+				CPUs:        1024,
+				GPUs:        gpus,
+				Resources:   resEnv,
+			},
+		}, nil
+	}
 
 	return storiface.WorkerInfo{
-		Hostname:        hostname,
+		Hostname:        l.name,
+		Ip:              WorkerIp,  //yungojs
+		Wid:             l.session, //yungojs
 		IgnoreResources: l.ignoreResources,
 		Resources: storiface.WorkerResources{
 			MemPhysical: memPhysical,
@@ -827,6 +988,10 @@ func (l *LocalWorker) Session(ctx context.Context) (uuid.UUID, error) {
 func (l *LocalWorker) Close() error {
 	close(l.closing)
 	return nil
+}
+
+func (l *LocalWorker) Done() <-chan struct{} {
+	return l.closing
 }
 
 // WaitQuiet blocks as long as there are tasks running
